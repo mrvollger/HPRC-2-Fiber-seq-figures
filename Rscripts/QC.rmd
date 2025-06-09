@@ -1,0 +1,11 @@
+```{r}
+source("Rscripts/utils.R")
+```
+
+```{r}
+manifest = read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQANHblpVkMcVMWUvYas6JQl0pqvgeiYDlWwG2xV9vQdihgTsdWqHfl0z5BKb1I8hXcQtH1WIhwTkII/pub?output=csv") %>%
+    data.table()
+manifest
+manifest %>%
+    as.tibble() 
+```
