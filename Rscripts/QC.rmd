@@ -3,9 +3,265 @@ source("Rscripts/utils.R")
 ```
 
 ```{r}
-manifest = read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQANHblpVkMcVMWUvYas6JQl0pqvgeiYDlWwG2xV9vQdihgTsdWqHfl0z5BKb1I8hXcQtH1WIhwTkII/pub?output=csv") %>%
-    data.table()
-manifest
-manifest %>%
+all_manifest = read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQANHblpVkMcVMWUvYas6JQl0pqvgeiYDlWwG2xV9vQdihgTsdWqHfl0z5BKb1I8hXcQtH1WIhwTkII/pub?output=csv") %>%
+    filter(Individual_ID != "HG02275") %>%
+    data.table() 
+all_manifest
+all_manifest %>%
     as.tibble() 
+all_manifest$qc
+colnames(all_manifest)
+
+all_manifest %>%
+    fwrite("../fiber-seq-pilot/online-manifest.tbl", row.names = FALSE, quote=FALSE, sep="\t")
+
+manifest = all_manifest %>%
+    filter(!is.na(dsa_bam))
+```
+
+```{r}
+read_qc = function(x) {
+    z = fread(x)
+    z$qc = x
+    z 
+}
+qcs = lapply(manifest$qc, read_qc)
+qc_df = bind_rows(qcs) %>%
+    merge(manifest %>% select(qc, ID, Individual_ID, Platform), by = "qc") %>%
+    data.table() 
+qc_df 
+```
+
+
+# make acf plots
+```{r}
+qc_df %>%
+    filter(statistic == "m6a_acf") %>%
+    mutate(
+        value = as.numeric(value),
+    ) %>%
+    filter(value > 30) %>%
+    ggplot(aes(x = value, y = count, color = Individual_ID)) +
+    #geom_point() +
+    geom_line(linewidth=0.25, alpha=0.85) +
+    my_grid() + 
+    facet_col(~Platform, scales="free_y") +
+    theme(
+        legend.position = "none",
+    )
+my_ggsave("Figures/QC-m6a-acf.pdf", width = 2, height = 2)
+```
+
+
+```{r}
+some_reads = function(x){
+    cmd=glue("ft extract -s --all - {x} | head -n 5000")
+    z=fread(cmd=cmd)
+    z$qc_bam = x
+    z
+}
+
+some_reads_df = lapply(manifest$qc_bam, some_reads) %>%
+    bind_rows() %>%
+    merge(manifest %>% select(qc_bam, ID, Individual_ID), by = "qc_bam") %>%
+    data.table()
+some_reads_df
+colnames(some_reads_df)
+```
+
+# plot read-length vs m6A rate
+```{r}
+some_reads_df %>%
+    mutate(
+        m6a_rate = total_m6a_bp / total_AT_bp,
+    ) %>%
+    #select(-fiber_sequence) %>%
+    ggplot(aes(x = fiber_length, y = m6a_rate)) +
+    stat_cor(size=2.5)+
+    geom_hex(bins=50) + 
+    facet_wrap(~ID) +
+    scale_x_continuous(labels = scales::comma) +
+    my_grid()
+my_ggsave("Figures/QC-m6a-rate-vs-fiber-length.pdf", width = 7, height = 6)
+```
+
+
+## plot the QC after FIRE
+```{r}
+qc_post_fire_files = Sys.glob("/mmfs1/gscratch/stergachislab/HPRC/fiber-seq-pilot/DSA-FIRE/results/*/*qc.tbl.gz") %>%
+    sort()
+
+qc_fire_df = bind_rows(lapply(qc_post_fire_files, read_qc), .id="file") %>%
+    mutate(
+        uID = basename(qc) %>% gsub("-.*", "", .),
+    ) %>%
+    # split on _ into id, ps, and platform
+    separate(
+        uID, 
+        into=c("Individual_ID", "PS", "Platform"), sep="_",
+        remove=FALSE
+    ) %>%
+    select(-qc, -file) %>%
+    data.table() 
+
+qc_fire_df
+```
+
+# make acf plots 2
+```{r}
+qc_fire_df %>%
+    filter(Individual_ID!="HG002") %>%
+    filter(statistic == "m6a_acf") %>%
+    mutate(
+        value = as.numeric(value),
+    ) %>%
+    filter(value > 30) %>%
+    ggplot(aes(x = value, y = count, color = Individual_ID)) +
+    #geom_point() +
+    geom_line(linewidth=0.25, alpha=0.85) +
+    my_grid() + 
+    facet_col(~Platform, scales="free_y") +
+    theme(
+        legend.position = "none",
+    )
+my_ggsave("Figures/m6a_acf_fire.pdf", width = 2, height = 2)
+```
+
+
+# get_read_lengths
+```{r}
+read_lengths = qc_fire_df %>%
+    filter(statistic == "fiber_length") %>%
+    mutate(
+        value = as.numeric(value),
+    ) 
+
+```
+
+# get phased_bp
+```{r}
+phased_bp = qc_fire_df %>%
+    filter(statistic == "phased_bp") %>%
+    group_by(Individual_ID, PS, Platform, uID) %>%
+    mutate(
+        total_bp = sum(as.numeric(count), na.rm=TRUE),
+        total_Gbp = total_bp / 1e9,
+    )
+phased_bp
+```
+
+# plot the N50s of the read lengths
+```{r}
+test_data = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+n50_fun = function(lengths, counts) {
+    # do this in a dplyr way
+    if (missing(counts)) {
+        counts = rep(1, length(lengths))
+    }
+    tdf = data.frame(lengths = lengths, counts = counts) %>%
+        arrange(lengths) %>%
+        ungroup() %>%
+        mutate(
+            cum_counts = cumsum(counts*lengths),
+        ) %>%
+        summarise(
+            total_counts = sum(counts*lengths, na.rm=TRUE),
+            n50 = lengths[cum_counts >= total_counts / 2][1]
+        ) 
+    return(tdf$n50[[1]])
+}
+n50_fun(test_data)
+
+n50_df = read_lengths %>%
+    group_by(Individual_ID, PS, Platform, uID) %>%
+    summarise(
+        n50 = n50_fun(as.numeric(value), as.numeric(count)),
+    ) 
+n50_df
+n50_df %>%
+    group_by(Platform) %>%
+    summarise(
+        n50 = mean(n50, na.rm=TRUE),
+    )
+
+n50_df %>%
+    filter(Platform != "ONT") 
+
+n50_df %>%
+    filter(!is.na(Platform)) %>%
+    ggplot(aes(x = fct_reorder(uID, n50), y = n50, fill = Platform)) +
+    geom_col() +
+    scale_y_continuous("N50 (bp)", labels = scales::comma) +
+    scale_x_discrete(
+        # replace the label (uID) with the Individual_ID
+        labels = function(x) {
+            gsub("_.*", "", x) 
+        } 
+        # make the text smaller
+    ) +
+    xlab("") +
+    my_grid() +
+    scale_fill_manual(values = PLAT_COLORS) +
+    facet_row(~Platform, scales="free_x", space="free") +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 4),
+        legend.position = "none",
+    )
+my_ggsave("Figures/QC-n50-per-sample.pdf", width = 3, height = 2)
+```
+
+
+# make a plot of total Gbp from phased_bp
+```{r}
+pre_filters = qc_df %>%
+    filter(statistic=="phased_bp") %>%
+    group_by(ID, Platform) %>%
+    summarise(
+        total_bp = sum(as.numeric(count), na.rm=TRUE),
+        total_Gbp = total_bp / 1e9,
+        source = "pre-filters",
+    ) %>%
+    rename(
+        uID = ID
+    )
+
+bind_rows(list(
+        fire=phased_bp %>% filter(value=="UNK"),
+        raw=pre_filters
+        ),
+        .id="source"
+    ) %>%
+    filter(!is.na(Platform)) %>%
+    ggplot(
+        aes(
+            x = fct_reorder(uID, total_Gbp),
+            y = total_Gbp,
+            alpha = source,
+            fill = Platform
+        )
+    ) +
+    geom_col(position="dodge") +
+    scale_y_continuous("Gbp", labels = scales::comma) +
+    scale_x_discrete(
+        # replace the label (uID) with the Individual_ID
+        labels = function(x) {
+            gsub("_.*", "", x) 
+        } 
+        # make the text smaller
+    ) +
+    xlab("") +
+    my_grid() +
+    scale_fill_manual(values = PLAT_COLORS) +
+    scale_alpha_manual(values = c(0.85, 0.3)) +
+    facet_row(~Platform, scales="free_x", space="free") +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 4),
+        #legend.position = "none",
+    )
+my_ggsave("Figures/QC-phased-bp-per-sample.pdf", width = 3, height = 2)
+```
+
+
+```{r}
+
 ```

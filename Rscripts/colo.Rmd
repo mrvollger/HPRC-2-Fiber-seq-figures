@@ -1,0 +1,79 @@
+
+```{r}
+source("Rscripts/utils.R")
+```
+
+```{r}
+vcff="/mmfs1/gscratch/stergachislab/mhsohny/SMaHT/Improving_SomaticVariantCalling_through_DSA/Fiber-seq/VariantCalls_DeepVariant_1.6.1/Mutational_Spectrum/COLO829T_PassageB_DSA.deepvariant.PASS.snv.annot.shared.final.vcf.gz"
+vcf=read_vcf(vcff)
+vcf
+```
+
+```{r}
+colo_fire_f="/mmfs1/gscratch/stergachislab/mhsohny/SMaHT/FIREs/results/COLO829BL_DSA/FDR-peaks/FDR.track.bed.gz"
+tmp = my_read_bed(cmd=glue("zcat {colo_fire_f} | head"))
+fire_name = colnames(tmp)
+```
+
+
+```{r}
+cmd=glue("bedtools intersect -a {colo_fire_f} -b {vcff} -u")
+vcf_with_fire=fread(cmd=cmd)
+colnames(vcf_with_fire) = fire_name
+```
+
+# make random bedtools regiosn with bed_shuffle
+```{r}
+colo_fai=fread("/mmfs1/gscratch/stergachislab/assemblies/DSA_COLO829BL_v3.0.0.fasta.fai")
+colnames(colo_fai)=c("chrom","size","x","y","z")
+
+random_bed=bed_shuffle(vcf,colo_fai,seed=42)
+random_bed %>%
+    fwrite("temp/colo_random.bed",sep="\t",col.names=F,quote=F)
+```
+
+# intersect with fire with random
+```{r}
+cmd=glue("bedtools intersect -a {colo_fire_f} -b temp/colo_random.bed -u")
+vcf_with_fire_random=fread(cmd=cmd)
+colnames(vcf_with_fire_random) = fire_name  
+```
+
+
+
+# results 
+```{r}
+vcf_with_fire
+vcf_with_fire_random
+
+
+colo_fire_data = bind_rows(
+    list(
+        real=vcf_with_fire,
+        shuffle=vcf_with_fire_random
+    ),
+    .id="source"
+)
+colnames(colo_fire_data)
+```
+
+# plot fire_coverage / coverage for the two different sources
+```{r}
+colo_fire_data %>%
+    mutate(
+        stat = fire_coverage/coverage,
+    ) %>%
+    filter(!is.na(stat)) %>%
+    ggplot(aes(y=stat, x=source))+
+    geom_violin()+
+    # add the median 
+    geom_text_repel(
+        data = . %>% group_by(source) %>% summarise(stat = mean(stat)),
+        aes(label = round(stat,5), x=source, y=stat),
+    ) +
+    scale_y_continuous(
+        "Frac FIRE",
+    )+
+    my_grid()
+my_ggsave("Figures/colo-fire-over-somatic-snvs.pdf", width = 3, height = 2)
+```

@@ -16,13 +16,15 @@ setup = { depends-on = ["godb"] }
 
 [dependencies]
 r-base = ">=4.1"
+r-changepoint = "*"
 bioconductor-karyoploter = "1.28.0"
 bioconductor-genomicranges = "*"
+bioconductor-dnacopy = "*"
 #bioconductor-helloranges = "*"
 bioconductor-chipseeker = { channel = "bioconda" }
 r-tidyverse = { version = ">=2.0", channel = "conda-forge" }
 r-rcolorbrewer = { channel = "conda-forge" }
-r-scales = { channel = "conda-forge" }
+r-scales = ">=1.4"
 "r-data.table" = "*"
 r-ggrepel = "*"
 r-cowplot = "*"
@@ -69,3 +71,4 @@ r-hexbin = ">=1.28.5,<2"
 "bioconductor-go.db" = ">=3.18.0,<4"
 r-runner = { version = ">=0.4.4,<0.5", channel = "conda-forge" }
 r-lsa = { version = ">=0.73.3,<0.74", channel = "conda-forge" }
+r-devtools = ">=2.4.5,<3"

@@ -55,6 +55,11 @@ MODEL_COLORS = c(PacBio=Indigo,
     Revio="#f41c90" # black
 )
 
+PLAT_COLORS = c(
+    PacBio="#f41c90", 
+    ONT=Indigo # blue
+)
+
 read_m6a = function(file, my_tag = "", min_ml = 200, nrows=Inf, ref=TRUE){
     tmp = fread(glue(file), nrows=nrows)  %>%
         filter(en - st > 0.5 * fiber_length | (en == 0 & st == 0)) %>%
@@ -484,7 +489,7 @@ scientific_10 <- function(x) {
     rtn
 }
 
-my_read_bed = function(...){
+my_read_bed = function(..., sort=TRUE){
     df=fread(...)
     names = colnames(df)
     names[names == "start"] = "start.other"
@@ -492,7 +497,10 @@ my_read_bed = function(...){
     names[1:3] = c("chrom", "start", "end")
     colnames(df) = names
     # sort by chrom then start then end
-    df = df[order(df$chrom, df$start, df$end)]
+    if(sort){
+        df = df[order(df$chrom, df$start, df$end)]
+    }
+    df
 }
 
 logit_e = function(x, a=1, b=0) {

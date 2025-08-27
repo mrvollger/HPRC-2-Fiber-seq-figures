@@ -1,0 +1,558 @@
+```{r}
+source("Rscripts/utils.R")
+#library(devtools)
+#devtools::install_github("mrvollger/mrvplot")
+library(mrvplot)
+
+```
+
+```{r}
+dir1="/mmfs1/gscratch/stergachislab/HPRC/fiber-seq-pilot/DSA-FIRE/results/HG002/"
+dir2="/mmfs1/gscratch/stergachislab/minkinaa/results/hprc_graph_tests/HG002_InjSurj/FIRE/results/HG002_DSA/"
+dir3="/mmfs1/gscratch/stergachislab/FIRE/results/HG002/"
+dir4="/mmfs1/gscratch/stergachislab/minkinaa/results/hprc_graph_tests/HG002_250821/FIRE/results/HG002_250821/"
+dir5="/mmfs1/gscratch/stergachislab/mvollger/projects/dev-fire/results/HG002_PS01015_GRCh38/"
+
+
+my_colors = c(
+    "DIP-DSA" = "#E69F00",
+    "DSA" = "#56B4E9",
+    "GRCh38" = "#444444",
+    "GRCh38 Low cov" = "#444444",
+    "DIP-DSA H1" = "#9a6b00",
+    "DIP-DSA Low cov H1" = "#9a6b00",
+    "DIP-DSA H2" = "#002f9a",
+    "DIP-DSA Low cov H2" = "#002f9a",
+    "DIP-DSA Low cov" = "#E69F00"
+)
+files = list(
+    `DIP-DSA Low cov`=my_read_bed(glue("{dir4}/HG002_250821-fire-v0.1.2-peaks.bed.gz")),
+    `DIP-DSA`=my_read_bed(glue("{dir2}/HG002_DSA-fire-v0.1.2-peaks.bed.gz")),
+    `GRCh38`=my_read_bed(glue("{dir3}/HG002-fire-v0.1-peaks.bed.gz")),
+    `GRCh38 Low cov`=my_read_bed(glue("{dir5}/HG002_PS01015_GRCh38-fire-v0.1-peaks.bed.gz")),
+    `DSA`=my_read_bed(glue("{dir1}/HG002-fire-v0.1-peaks.bed.gz"))
+)
+
+hg002_df = bind_rows(files, .id="source") %>%
+    mutate(
+        method = case_when(
+            grepl("DIP-DSA", source) ~ "DIP-DSA",
+            grepl("GRCh38", source) ~ "GRCh38",
+            grepl("DSA", source) ~ "DSA",
+        ),
+        ref = case_when(
+            grepl("DSA", source) ~ "DSA",
+            TRUE ~ "GRCh38"
+        ),
+        haplotype = case_when(
+            grepl("PATERNAL", chrom) ~ "H1",
+            grepl("MATERNAL", chrom) ~ "H2",
+            TRUE ~ ""
+        ),
+        sample_coverage = case_when(
+            grepl("Low cov", source) ~ "Low coverage",
+            TRUE ~ "High coverage"
+        ),
+    ) %>%
+    arrange(chrom, start) %>%
+    mutate(
+        # strip after _
+        simple_chrom = gsub("_.+", "", chrom),
+        simple_chrom = factor(simple_chrom, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10",
+                                                        "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18",
+                                                        "chr19", "chr20", "chr21", "chr22", "chrX", "chrY"))
+    ) %>%
+    # make cuts based of the % accessibly in 5% bins
+    mutate(
+        is_paternal = grepl("PATERNAL", chrom),
+        percent_accessible = fire_coverage / coverage * 100,
+        percent_accessible_group = cut(
+            percent_accessible,
+            breaks = seq(0, 100, by = 5),
+            include.lowest = TRUE,
+            labels = paste0(seq(0, 95, by = 5), "-", seq(5, 100, by = 5), "%")
+        ),
+        # also make a new group that is the same as method but splits maternal and paternal in DSA-DIP
+        group = paste(method, sample_coverage, haplotype),
+    ) %>%
+    filter(
+        percent_accessible >= 5 & source == "DSA" | 
+        percent_accessible >= 10
+    ) 
+
+table(hg002_df$source) 
+table(hg002_df$group)
+table(hg002_df[,c("group", "sample_coverage")])
+hg002_df %>%
+    group_by(group) %>%
+    summarise(
+        mean(pass_coverage),
+        n(),
+        sum(pass_coverage),
+    )
+```
+
+```{r}
+hg002_df %>%
+    group_by(method, percent_accessible_group) %>%
+    # make wide by method
+    summarise(
+        n_peaks = n(),
+        percent_accessible = mean(percent_accessible, na.rm = TRUE),
+    ) %>%
+    pivot_wider(
+        names_from = method,
+        values_from = c(n_peaks, percent_accessible),
+        values_fill = 0
+    ) 
+# make a plot out of this, it should be a cumulative distribution of the percent accessible vs number of peaks
+hg002_df$group %>% table()
+
+hg002_df %>%
+    group_by(method, group, percent_accessible_group, sample_coverage) %>%
+    summarise(
+        n_peaks = n(),
+        percent_accessible = mean(percent_accessible, na.rm = TRUE),
+    ) %>%
+    ggplot(aes(x = percent_accessible, y = n_peaks, color = method)) +
+    geom_line(linewidth=0.2) +
+    my_grid() +
+    scale_color_manual(values = my_colors) +
+    scale_x_continuous(
+        name = "Percent accessible",
+        label = comma,     
+    ) +
+    scale_y_continuous(
+        name = "Number of peaks",
+        labels = comma,
+    ) +
+    facet_col(~sample_coverage) +
+    theme(
+    )
+my_ggsave("Figures/HG002-peaks-percent-accessible.pdf", width = 3, height = 2)
+```
+
+
+# number of peaks per chromosome
+```{r}
+hg002_df %>%
+    ggplot(aes(y = simple_chrom, fill = method, group=group)) +
+    geom_bar(position="dodge") +
+    scale_fill_manual(values = my_colors) +
+    scale_x_continuous(
+        name = "Number of peaks",
+        labels = comma,
+    ) +
+    #theme_cowplot(font_size=6) +
+    facet_col(~sample_coverage) +
+    mrv_vgrid() + 
+    theme(
+
+    )
+my_ggsave("Figures/HG002-peaks-per-chromosome.pdf", width = 3, height = 4)
+```
+
+
+# read in the pileups like I read in the peaks
+```{r}
+n_sample = 1e6
+cmd2=glue("bgzip -@ 16 -cd {dir2}/HG002_DSA-fire-v0.1.2-pileup.bed.gz")
+cmd2
+hg002_pileups = list(
+    DSA = my_read_bed(
+        cmd=glue("bgzip -@ 16 -cd {dir1}/HG002-fire-v0.1-pileup.bed.gz"),
+        sort=F
+        ) %>% 
+        sample_n(n_sample),
+    `DIP-DSA` = my_read_bed(
+        cmd=cmd2,
+        sort=F) %>% 
+        sample_n(n_sample),
+    `GRCh38` = my_read_bed(
+        cmd=glue("bgzip -@ 16 -cd {dir3}/HG002-fire-v0.1-pileup.bed.gz"),
+        sort=F) %>% 
+        sample_n(n_sample)
+    `DIP-DSA-Low` = 
+) 
+
+pileup_df = bind_rows(hg002_pileups, .id="method")
+
+```
+
+# plot a density profile of the coverage from the three methods
+```{r}
+pileup_df %>%
+    group_by(method) %>%
+    sample_n(25000) %>%
+    mutate(
+        coverage = case_when(
+            coverage > 100 ~ 100,
+            TRUE ~ coverage
+        )
+    ) %>%
+    ggplot(aes(x = coverage, fill = method)) +
+    geom_density(alpha = 0.5) +
+    my_grid() +
+    scale_fill_manual(values = my_colors) +
+    scale_x_continuous(
+        name = "Coverage",
+        labels = comma,
+    ) +
+    theme(
+        legend.position = "bottom"
+    )
+my_ggsave("Figures/HG002-peaks-all-coverage.pdf", width = 3, height = 2)
+```
+
+
+# plot percent actuation for each method as a density plot
+```{r}
+hg002_df %>%
+    mutate(
+        actuation = fire_coverage/coverage,
+        #actuation = case_when(method == "DSA" ~ actuation/2, TRUE ~ actuation)
+    ) %>% 
+    ggplot(aes(x = actuation, fill = method)) +
+    #geom_histogram(binwidth=0.01) + facet_col(~method) +
+    geom_density(alpha = 0.5, adjust=0.25) +
+    my_grid() +
+    scale_fill_manual(values = my_colors) +
+    scale_x_continuous(
+        name = "Percent actuation",
+        labels = scales::percent_format(accuracy = 2),
+        limits = c(0, 1),
+    ) +
+    facet_col(~sample_coverage) +
+    theme(
+    )
+my_ggsave("Figures/HG002-peaks-actuation.pdf", width = 3, height = 3)
+```
+
+
+```{r}
+FAI=fread("~/assemblies/hg38.analysisSet.fa.fai")
+colnames(FAI)[1:2] = c("chrom", "size")
+FAI = FAI %>% filter(!grepl("_", chrom))
+
+h1=my_read_bed("/mmfs1/gscratch/stergachislab/minkinaa/results/hprc_graph_tests/HG002_InjSurj/FIRE/results/HG002_DSA/downstream_analyses/pg_inject_tests/surjected_outputs/HG002peaks_MATERNAL-InjSurj-ViaGraph-HG002.full/HG002peaks_MATERNAL-InjectedInto-HG002.full-SurjOnto-GRCh38_withTags_and_corrFlag_sorted_FIREextracted.bed")
+
+h2=my_read_bed("/mmfs1/gscratch/stergachislab/minkinaa/results/hprc_graph_tests/HG002_InjSurj/FIRE/results/HG002_DSA/downstream_analyses/pg_inject_tests/surjected_outputs/HG002peaks_PATERNAL-InjSurj-ViaGraph-HG002.full/HG002peaks_PATERNAL-InjectedInto-HG002.full-SurjOnto-GRCh38_withTags_and_corrFlag_sorted_FIREextracted.bed")
+h1_low_cov = my_read_bed("/mmfs1/gscratch/stergachislab/HPRC/mrv-figures/HG002.maternal.on.38.bed.gz")
+h2_low_cov = my_read_bed("/mmfs1/gscratch/stergachislab/HPRC/mrv-figures/HG002.paternal.on.38.bed.gz")
+
+hg_38_peaks = bind_rows(list(
+    paternal = h1,
+    maternal = h2,
+    paternal_low = h1_low_cov,
+    maternal_low = h2_low_cov
+    ),
+    .id="source"
+)
+colnames(hg_38_peaks)[2:ncol(hg_38_peaks)]=colnames(files[[1]])
+hg_38_peaks = hg_38_peaks %>%
+    mutate(
+        percent_accessible = fire_coverage / coverage * 100,
+        sample_coverage = case_when(
+            grepl("low_cov", source) ~ "Low coverage",
+            TRUE ~ "High coverage"
+        ),
+    ) %>%
+    filter(
+        percent_accessible >= 10
+    )
+
+table(hg_38_peaks$chrom)
+table(hg002_df %>% filter(ref == "GRCh38") %>% pull(chrom))
+
+hg002_hg38_only = hg002_df %>%
+    filter(ref == "GRCh38") %>%
+    group_by(sample_coverage) %>%
+    bed_map(
+        hg_38_peaks %>% group_by(sample_coverage),
+        n_dsa_peaks = n(),   
+    ) %>%
+    replace_na(list(n_dsa_peaks = 0)) %>%
+    filter(n_dsa_peaks == 0)
+
+table(hg002_hg38_only$sample_coverage)
+
+hg002_dsa_only = hg_38_peaks %>%
+    bed_map(
+        hg002_df %>% filter(method == "GRCh38" | method == "GRCh38 Low cov"),
+        n_grch38_peaks = n(),
+    ) %>%
+    replace_na(list(n_grch38_peaks = 0)) %>%
+    filter(n_grch38_peaks == 0) %>%
+    mutate(method = "DSA-only")
+
+
+gwas = read_vcf("../fiber-seq-pilot/GWAS-validation/hg002.het.risk.vcf") %>%
+    select(-chrom) %>%
+    mutate(
+        chrom = as.character(CHROM),
+        #start = POS-1,
+        #end = POS
+    ) 
+    #data.table
+table(gwas$chrom)
+table(gwas$CHROM)
+random = bed_shuffle(
+    bind_rows(
+        list(
+            hg002_df %>% filter(method=="GRCh38"),
+            hg_38_peaks)
+    ), 
+    FAI,
+    seed=42,
+)
+#hg002_df %>% filter(method=="GRCh38") %>% pull(chrom) %>% table()
+
+gwas_long = bind_rows(
+    list(
+        random=random,
+        GRCh38 = hg002_df %>% filter(method == "GRCh38"),
+        `GRCh38-low` = hg002_df %>% filter(method == "GRCh38 Low cov"),
+        `GRCh38-only-low` = hg002_hg38_only %>% filter(grepl("Low cov", method)),
+        `DSA-H1` = hg_38_peaks %>% filter(source=="paternal"),
+        `DSA-H2` = hg_38_peaks %>% filter(source=="maternal"),
+        `DSA-H1-low` = hg_38_peaks %>% filter(source=="paternal_low"),
+        `DSA-H2-low` = hg_38_peaks %>% filter(source=="maternal_low"),
+        `DSA-only` = hg002_dsa_only,
+        `GRCh38-only` = hg002_hg38_only %>% filter(!grepl("Low cov", method))
+    ), 
+    .id = "source"
+) %>%
+    filter(
+        chrom != "chrX",
+        chrom != "chrY",
+    ) %>%
+    valr::bed_map(
+        gwas,
+        n_gwas = n(),
+    ) %>%
+    replace_na(list(n_gwas = 0)) %>%
+    group_by(source) %>%
+    summarise(
+        n_peaks = n(),
+        n_gwas = sum(n_gwas),
+        n_bp = sum(end - start),
+        gwas_frac = n_gwas / n_bp,
+    ) 
+
+
+
+wide_gwas = bind_cols(
+        gwas_long %>% filter(source!="random"),
+        gwas_long %>% filter(source=="random") %>% rename_with(~paste0(.,"_random")),
+    ) %>%
+    mutate(
+        enrichment_per_base = gwas_frac / gwas_frac_random,
+        enrichment_per_peak = n_gwas / n_peaks / (n_gwas_random / n_peaks_random),
+    )
+wide_gwas
+
+##2.323439
+```
+
+# plot the enrichment per base for the wide GWAS data
+```{r}
+enrichment_colors = c(
+    "GRCh38" = my_colors[["GRCh38"]],
+    "DSA-H1" = my_colors[["DIP-DSA H1"]],
+    "DSA-H2" = my_colors[["DIP-DSA H2"]],
+    "GRCh38-only" = "#D55E00",
+    "random" = "#CC79A7"
+)
+
+wide_gwas %>%
+    ggplot(aes(y = source, x = enrichment_per_base, fill = source)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "black") +
+    geom_text(
+        aes(
+            label = paste(
+                "O/E =", round(enrichment_per_base, 2),
+                "\n",
+                "n =", comma(n_peaks)
+            )
+        ),
+        position = position_stack(vjust = 0.5),
+        color = "white",
+        size=2,
+    ) +
+    my_grid() +
+    scale_fill_manual(values = enrichment_colors) +
+    scale_x_continuous(
+        name = "Log fold enrichment of GWAS variants",
+        trans="log2",
+        #limits = c(0.75,NA),
+    ) + annotation_logticks(sides = "b") +
+    scale_y_discrete("") +
+    #coord_cartesian(xlim= c(1, NA)) +
+    theme(
+        legend.position = "none",
+    )
+
+my_ggsave(
+    "Figures/HG002-peaks-gwas-enrichment-per-peak.pdf", 
+    width = 3, 
+    height = 2
+)
+```
+
+
+# hap selective tests 
+```{r}
+hap_df = bind_rows(list(
+    `DIP-DSA`=my_read_bed(glue("{dir2}/HG002_DSA-fire-v0.1.2-hap-differences.bed.gz")),
+    `GRCh38`=my_read_bed(glue("{dir3}/HG002-fire-v0.1-hap-differences.bed.gz"))
+    ),
+    .id="method"
+) %>%
+    mutate(
+        percent_accessible = fire_coverage / coverage * 100,
+        group = case_when(
+            method == "DIP-DSA" & grepl("PATERNAL", chrom) ~ "DIP-DSA H1",
+            method == "DIP-DSA" & !grepl("PATERNAL", chrom) ~ "DIP-DSA H2",
+            TRUE ~ method
+        ),
+    ) %>%
+    filter(
+        percent_accessible >= 5 & method == "DSA" | 
+        percent_accessible >= 10
+    )
+hap_df
+```
+
+# recalculate p_adjust
+```{r}
+hap_df = hap_df %>%
+    filter(autosome=="Autosome") %>%
+    mutate(
+        is_paternal = grepl("PATERNAL", chrom),
+    ) %>%
+    group_by(method, is_paternal) %>%
+    mutate(
+        p_adjust = p.adjust(p_value, method = "BH"),
+        n_in_group = n(),
+    )
+table(hap_df$n_in_group)
+
+
+sum(p.adjust(hap_df %>% filter(method=="DIP-DSA") %>% pull(p_value), method = "BH")<=0.05)
+
+sum(p.adjust(hap_df %>% filter(method=="DIP-DSA", is_paternal) %>% pull(p_value), method = "BH")<=0.05)
+
+```
+
+# plot number of significant peaks
+```{r}
+hap_df %>%
+    filter(p_adjust <= 0.05) %>%
+    filter(
+        !grepl("chrX", chrom),
+        !grepl("chrY", chrom),
+    ) %>%
+    ggplot(aes(y = group, fill = group)) +
+    geom_bar() +
+    geom_text(
+        aes(label = after_stat(count)),
+        stat = "count",
+        position = position_stack(vjust = 0.5),
+        color = "white"
+    ) +
+    mrv_vgrid() +
+    scale_fill_manual(values = my_colors) +
+    scale_y_discrete(
+        name = "Method",
+    ) +
+    scale_x_continuous(
+        name = "Number of significant peaks",
+        labels = comma,
+    ) +
+    theme(
+        legend.position = "none"
+    )
+my_ggsave("Figures/HG002-peaks-n-hap-selective.pdf", width = 3, height = 2)
+```
+
+# plot the haplotype deltas
+```{r}
+hap_df %>% filter(p_adjust <= 0.05) %>% pull(chrom) %>% table()
+
+hap_df %>%
+    ggplot(aes(x = diff, fill = method)) +
+    geom_density(alpha = 0.5) +
+    my_grid() +
+    scale_fill_manual(values = my_colors) +
+    scale_x_continuous(
+        name = "Haplotype delta",
+        labels = comma,
+    ) +
+    theme(
+        legend.position = "bottom"
+    )
+my_ggsave("Figures/HG002-peaks-hap-selective-diff.pdf", width = 3, height = 2)
+```
+
+## qq plot of the p_adjust values
+```{r}
+k=hap_df %>%
+    #filter(p_adjust <= 0.05) %>%
+    filter(
+        !grepl("chrX", chrom),
+        !grepl("chrY", chrom),
+        pass_coverage
+    ) %>%
+    # if the p value is 0, set it to the smallest non-zero p-value
+    mutate(
+        p_value = case_when(
+            p_value == 0 ~ min(p_value[p_value > 0]),
+            TRUE ~ p_value
+        )
+    ) %>%
+    select(method, p_value) %>%
+    group_by(method) %>%
+    mutate(
+        percentile = percent_rank(p_value),
+    ) %>%
+    ggplot(aes(x = percentile, y = p_value, color = method)) +
+    geom_line() +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    scale_color_manual(values = my_colors) +
+    # fixed x and y axis
+    #coord_fixed() +
+    scale_x_continuous(
+        name = "Percentile of p-values",
+        trans= "log10",
+        label=scientific_10,
+    ) +
+    scale_y_continuous(
+        name = "p-value",
+        trans="log10",
+        label=scientific_10,
+    ) + 
+    annotation_logticks(linewidth = 0.1, sides = "bl") +
+    my_grid() +
+    theme(
+        #legend.position = "bottom"
+    )
+
+my_ggsave("Figures/HG002-peaks-hap-selective-qq.pdf",
+    width = 3,
+    height = 2
+)
+```
+
+# the frac of total peaks that are hap selective
+```{r}
+hap_df %>%
+    group_by(method, is_paternal) %>%
+    summarise(
+        n_peaks = n(),
+        n_sig = sum(p_adjust <= 0.05),
+        frac_sig = n_sig / n_peaks,
+    )
+```
+
+

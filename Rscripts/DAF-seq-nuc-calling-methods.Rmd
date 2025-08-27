@@ -1,0 +1,132 @@
+```{r}
+source("Rscripts/utils.R")
+library(DNAcopy)
+library(splitstackshape)
+library(changepoint)
+```
+
+
+```{r}
+#  CNA.object <- CNA(cbind(coriell$Coriell.05296),
+# coriell$Chromosome,coriell$Position,
+# data.type="logratio",sampleid="c05296")
+# > smoothed.CNA.object <- smooth.CNA(CNA.object)
+#> segment.smoothed.CNA.object <- segment(smoothed.CNA.object, verbose=1)
+
+#> plot(segment.smoothed.CNA.object, plot.type="s")
+
+```
+
+
+
+```{r}
+bamf = "/mmfs1/gscratch/stergachislab/swansoe/projects/DddA/single_cell/expt1_HG002_FACS/msp_analysis/fibertools_msp/PS00756_consensus_BothStrands_HG38_corrected.haplotagged.m6A_nuc.bam"
+bam="small.daf.seq.bam"
+daf_seq = fread(cmd=glue("ft extract -s --all - {bamf} | head -n 100")) %>%
+    select(fiber, fiber_length, m6a) %>%
+    cSplit(c("m6a"), direction="long") %>%
+    data.table
+```
+
+```{r}
+make_binary_vector <- function(m6a_positions, fiber_length) {
+    # Create a binary vector of length fiber_length initialized to 0
+    #print(m6a_positions)
+    m6a_binary = rep(0, fiber_length)
+    # Set positions with m6a to 1
+    m6a_binary[m6a_positions] = 1
+    return(m6a_binary)
+}
+
+# turn the list of positions with m6a into a binary vector
+bin_data = daf_seq %>% 
+    group_by(fiber, fiber_length) %>%
+    filter(fiber_length > 0) %>%
+    summarise(
+        m6a_binary = list(make_binary_vector(m6a, fiber_length[[1]]))[1:2000],
+        bin_count = sum(m6a_binary[[1]]),
+        bin_count_2 = n(),
+    ) 
+
+bin_data %>%
+    head(1) %>%
+    fwrite("tmp.txt", sep="\t", quote=F, row.names=F, col.names=T)
+
+
+keep = unique(smoothed_data[smoothed_data$fiber_length>plot_len,]$fiber)[1:8]
+
+```
+
+
+```{r}
+d=bin_data$m6a_binary[[1]]
+# Most straightforward approach
+rtn = cpt.mean(d, method="PELT", minseglen=100)
+pdf("tmp.pdf")
+plot(rtn)
+dev.off()
+
+summary(rtn)
+rtn
+```
+
+
+```{r}
+
+plot_len = 2000
+daf_seq %>%
+    filter(fiber %in% keep) %>%
+    filter(fiber_length>plot_len) %>%
+    filter(m6a < plot_len & m6a>500) %>%
+    head(4000) %>%
+    mutate(
+        y=as.numeric(factor(fiber)),
+    ) %>%
+    ggplot() +
+    geom_rect(aes(xmin=m6a-0.45, xmax=m6a+0.45, ymin=y-0.4, ymax=y+0.4), fill="black") +
+    my_grid() 
+my_ggsave("Figures/daf-seq-data.pdf", width=8, height=8)
+```
+
+```{r}
+smooth_w = 75
+smoothed_data = bin_data %>% 
+    #filter(bin_count/fiber_length >= 0.05) %>%
+    # make m6a_binary long format
+    unnest(m6a_binary) %>%
+    group_by(fiber, fiber_length) %>%
+    # apply a rolling mean to the binary vector
+    mutate(
+        total_mean = mean(m6a_binary, na.rm=TRUE),
+        smooth = rollmean(m6a_binary, k=smooth_w, fill=
+NA, align="center") * 1/total_mean,
+        x= 1:n(),
+    )
+
+```
+
+# plot the smoothed data like the original data
+```{r}
+keep = unique(smoothed_data[smoothed_data$fiber_length>plot_len,]$fiber)[1:8]
+
+smoothed_data %>%
+    filter(bin_count/fiber_length >= 0.05) %>%
+    filter(fiber_length>plot_len) %>%
+    filter(x < plot_len & x>500) %>%
+    filter(fiber %in% keep) %>%
+    mutate(
+        y=factor(fiber),
+    ) %>%
+    ggplot() +
+    geom_hline(yintercept=0, linetype="dashed", color="grey") +
+    geom_line(
+        aes(
+            x=x,
+            y=smooth,
+        )
+    ) +
+    facet_col(~y, scales="free_y") +
+    #scale_y_continuous(limits=c(0, 0.2)) +
+    my_grid()
+my_ggsave("Figures/daf-seq-smoothed.pdf", width=8, height=8)
+```

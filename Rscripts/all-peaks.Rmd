@@ -1,0 +1,197 @@
+```{r}
+source("Rscripts/utils.R")
+SDs=my_read_bed("/mmfs1/gscratch/stergachislab/HPRC/annotations/segdups/all-segdups-merged.bed.gz") %>%
+    mutate(
+        Individual_ID = gsub("#.*", "", chrom),
+        Haplotype = case_when(
+            grepl("#1#", chrom) ~ "1",
+            grepl("#2#", chrom) ~ "2",
+            TRUE ~ "UNK",
+        ),
+    )
+
+SD_summary = SDs %>%
+    group_by(Individual_ID, Haplotype) %>%
+    summarise(
+        n_SD = n(),
+        n_SD_bp = sum(end - start + 1),
+        frac_sd = n_SD_bp / 3.0e9, # 3Gb human genome
+    ) %>%
+    arrange(desc(n_SD_bp))
+SD_summary
+```
+
+
+## plot the QC after FIRE
+```{r}
+fire_files = Sys.glob("/mmfs1/gscratch/stergachislab/HPRC/fiber-seq-pilot/DSA-FIRE/results/*/*peaks.bed.gz") 
+names(fire_files) = fire_files 
+
+fire_df = bind_rows(lapply(fire_files, my_read_bed), .id="aa") %>%
+    mutate(
+        uID = basename(aa) %>% gsub("-.*", "", .),
+    ) %>%
+    # split on _ into id, ps, and platform, dont rmeove original column
+    separate(uID, into=c("Individual_ID", "PS", "Platform"), sep="_",
+                remove=FALSE
+    ) %>%
+    bed_map(
+        SDs,
+        is_SD = n()> 0,
+    ) %>%
+    replace_na(list(is_SD=FALSE)) %>%
+    select(-aa) %>%
+    data.table() 
+
+fire_df
+```
+
+
+# see least accessible peaks per sample
+```{r}
+fire_df %>%
+    group_by(uID) %>%
+    summarise(
+        least = min(fire_coverage/coverage, na.rm=TRUE),
+    ) %>%
+    pull(least) %>%
+    max()
+
+min_frac_acc = 0.3
+```
+
+# plot peaks per sample nest by platform
+```{r}
+fire_df %>%
+    group_by(Individual_ID, PS, Platform, uID) %>%
+    filter(!is.na(Platform)) %>%
+    summarise(
+        n_peaks = n(),
+        n_peaks_pass = sum(fire_coverage/coverage >= min_frac_acc,
+        na.rm=TRUE),
+    ) %>%
+    ggplot(
+        aes(
+            #x = Platform,
+            x="",
+            y = n_peaks_pass,
+            color = Platform,
+            #alpha=is_SD,
+        )
+    ) +
+    #geom_col() +
+    geom_quasirandom(method = "pseudorandom") + 
+    geom_violin(color="black", fill=NA) +
+    #facet_row(~Platform, scales="free_x", space="free") +
+    scale_y_continuous("# of peaks", labels = scales::comma) +
+    xlab("")+
+    my_grid() +
+    scale_fill_manual(values = PLAT_COLORS) +
+    scale_color_manual(values = PLAT_COLORS) +
+    scale_alpha_manual(values = c(0.85, 0.5)) +
+    scale_x_discrete() +
+    theme(
+        legend.position = "top",
+    )
+my_ggsave(
+    "Figures/all-peaks-per-sample.pdf", 
+    width = 2, 
+    height = 2
+)
+```
+
+
+# plot percent SD peaks per sample
+```{r}
+percent_sd_df = fire_df %>%
+    group_by(Individual_ID, PS, Platform, uID) %>%
+    filter(!is.na(Platform)) %>%
+    filter(
+        fire_coverage/coverage >= min_frac_acc,
+    ) %>%
+    summarise(
+        n_peaks = n(),
+        n_peaks_pass = sum(fire_coverage/coverage >= min_frac_acc,
+        na.rm=TRUE),
+        n_SD_peaks = sum(is_SD),
+    ) %>%
+    mutate(
+        pct_SD = n_SD_peaks / n_peaks * 100,
+    )
+percent_sd_df 
+
+percent_sd_df %>%
+    ggplot(
+        aes(
+            #x = Platform,
+            x="",
+            y = pct_SD,
+            fill = Platform,
+            color = Platform,
+        )
+    ) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color="black", fill=NA)+
+    scale_y_continuous("% SD peaks", labels = scales::comma) +
+    xlab("")+
+    my_grid() +
+    scale_fill_manual(values = PLAT_COLORS) +
+    scale_color_manual(values = PLAT_COLORS) 
+
+my_ggsave(
+    "Figures/all-peaks-percent-sd-per-sample.pdf",
+    width = 3,
+    height = 2
+)
+```
+
+# plot the number of SD peaks per sample, using percent_sd_df
+# use beeswarm plot and violin plot
+```{r}
+percent_sd_df %>%
+    ggplot(
+        aes(
+            #x=Platform,
+            x="",
+            y = n_SD_peaks,
+            fill = Platform,
+            color = Platform,
+        )
+    ) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(fill=NA, color="black")+
+    # add the median for each platform as text summarising the data
+    # geom_text(
+    #     data = percent_sd_df %>%
+    #         group_by(Platform) %>%
+    #         summarise(median_n_SD_peaks = median(n_SD_peaks, na.rm=TRUE)),
+    #     aes(
+    #         #x = Platform,
+    #         y = median_n_SD_peaks,
+    #         label = scales::comma(median_n_SD_peaks),
+    #     ),
+    #     vjust = -0.5,
+    #     size = 2.5,
+    #     color = "black",
+    # ) +
+    scale_y_continuous("# SD peaks", labels = scales::comma) +
+    xlab("")+
+    my_grid() +
+    scale_fill_manual(values = PLAT_COLORS) +
+    scale_color_manual(values = PLAT_COLORS) +
+    scale_x_discrete(
+        # replace the label (uID) with the Individual_ID
+        labels = function(x) {
+            gsub("_.*", "", x) 
+        } 
+    ) +
+    theme(
+        legend.position = "top",
+    )
+my_ggsave(
+    "Figures/all-peaks-n-sd-peaks-per-sample.pdf",
+    width = 2,
+    height = 2
+)
+```
+ 
