@@ -1,0 +1,295 @@
+```{r}
+source("Rscripts/utils.R")
+#library(devtools)
+#devtools::install_github("mrvollger/mrvplot")
+library(mrvplot)
+
+hap_colors = c(
+    "paternal" = "#9a6b00",
+    "maternal" = "#002f9a",
+    # self be gray
+    "self" = "darkred"
+)
+```
+
+
+```{r}
+all_f = "/mmfs1/gscratch/stergachislab/minkinaa/results/hprc_graph_tests/HG002_InjSurj/FIRE/results/HG002_DSA/HG002_DSA-fire-v0.1.2-peaks.bed.gz"
+m_on_p = my_read_bed("HG002.maternal.on.paternal.bed.gz")
+p_on_m = my_read_bed("HG002.paternal.on.maternal.bed.gz")
+all_p = my_read_bed(all_f)
+# this is from HG002-peaks.Rmd
+hap_df = my_read_bed("Rtables/HG002-peaks-hap-selective.bed.gz")
+```
+
+```{r}
+cross_mapped = bind_rows(
+    list(
+        maternal_on_paternal = m_on_p,
+        paternal_on_maternal = p_on_m
+    ),
+    .id = "source"
+) 
+colnames(cross_mapped)[2:ncol(cross_mapped)] = colnames(all_p)
+cross_mapped
+
+# make a full peak set
+peaks = bind_rows(
+        list(
+        all = all_p %>% mutate(source = "all"),
+        cross_mapped = cross_mapped
+        ),
+    ) %>%
+    mutate(
+        percent_accessible = fire_coverage / coverage * 100
+    ) %>%
+    filter(percent_accessible >= 10) %>%
+    # remove x and y
+    filter(!grepl("chrX|chrY", chrom)) %>%
+    mutate(
+        is_all = ifelse(source == "all", TRUE, FALSE),
+        haplotype = case_when(
+            is_all & grepl("MATERNAL", chrom) ~ "maternal",
+            is_all & grepl("PATERNAL", chrom) ~ "paternal",
+            !is_all & grepl("MATERNAL", chrom) ~ "paternal",
+            !is_all & grepl("PATERNAL", chrom) ~ "maternal",
+            TRUE ~ "unknown" 
+        ),
+        intersects_with = case_when(
+            grepl("MATERNAL", chrom) ~ "paternal_on_maternal",
+            grepl("PATERNAL", chrom) ~ "maternal_on_paternal",
+            TRUE ~ "unknown"
+        )
+    ) %>%
+    group_by(source, haplotype) %>%
+    bed_map(
+        peaks %>% filter(source == "all"),
+        n_self_overlaps = n(),
+    )
+
+peaks %>%
+    group_by(source, haplotype, intersects_with) %>%
+    summarise(
+        n=n()
+    )
+
+peaks %>%
+    filter(source == "all") %>%
+    pull(n_self_overlaps) %>%
+    table()
+```
+
+```{r}
+peak_overlaps = peaks %>%
+    filter(source == "all") %>%
+    merge(
+        .,
+        hap_df %>% 
+            ungroup() %>%
+            filter(source=="DIP-DSA") %>%
+            select(chrom, start, end, p_adjust, p_value),
+        by=c("chrom", "start", "end"),
+        all.x=TRUE
+    ) %>%
+    group_by(intersects_with) %>%
+    bed_map(
+        peaks %>% filter(!source == "all") %>% group_by(intersects_with),
+        n_peaks_on_other_hap = n(),
+        n_bp_on_other_hap = sum(end-start),
+    ) %>%
+    # add self overlaps
+    ungroup() %>%
+    bed_map(
+        peaks %>% filter(source == "all") %>% ungroup(),
+        n_peaks_on_self = n(),
+        n_bp_on_self = sum(end-start),
+    ) %>%
+    replace_na(
+        list(
+            n_peaks_on_other_hap = 0,
+            n_bp_on_other_hap = 0,
+            n_peaks_on_self = 0,
+            n_bp_on_self = 0
+        )
+    ) %>%
+    mutate(
+        haplotype = case_when(
+            grepl("MATERNAL", chrom) ~ "maternal",
+            grepl("PATERNAL", chrom) ~ "paternal",
+            TRUE ~ "unknown" 
+        ),
+        average_reciprocal_overlap = pmin(
+            (end-start) / (n_bp_on_other_hap/n_peaks_on_other_hap),
+            (n_bp_on_other_hap/n_peaks_on_other_hap) / (end-start)
+        ),
+        is_hap_selective = case_when(
+            is.na(p_adjust) ~ FALSE,
+            p_adjust <= 0.05 ~ TRUE,
+            TRUE ~ FALSE
+        )
+    )
+
+self_overlap = peaks %>%
+    filter(source == "all") %>%
+    bed_map(
+        peaks %>% filter(source == "all"),
+        n_peaks_on_other_hap = n(),
+        n_bp_on_other_hap = sum(end-start),
+        other.start = start,
+        other.end = end,
+    ) %>%
+    mutate(
+        n_bp_on_other_hap = n_bp_on_other_hap-(end-start),
+        n_peaks_on_other_hap = n_peaks_on_other_hap-1
+    ) %>%
+    replace_na(
+        list(
+            n_peaks_on_other_hap = 0,
+            n_bp_on_other_hap = 0
+        )
+    ) %>%
+    filter(other.start != start | other.end != end) %>%
+    mutate(
+        average_reciprocal_overlap = pmin(
+            (end-start) / (n_bp_on_other_hap/n_peaks_on_other_hap),
+            (n_bp_on_other_hap/n_peaks_on_other_hap) / (end-start)
+        ),
+        haplotype = "self",
+    ) %>%
+    select(chrom, start, end, n_peaks_on_other_hap, n_bp_on_other_hap, average_reciprocal_overlap, haplotype)
+self_overlap
+```
+
+### plot the number of peaks that overlap cross-mapped peaks
+```{r}
+peak_overlaps %>%
+    ggplot(
+        aes(
+            x = n_peaks_on_other_hap - n_self_overlaps + 1,
+            fill = haplotype
+        )
+    ) +
+    geom_histogram(
+        binwidth = 1,
+        position = "dodge"
+    ) +
+    scale_y_continuous(
+        #trans="log10"
+        label=comma,
+    ) +
+    scale_fill_manual("",
+        values = hap_colors,
+    ) +
+    scale_x_continuous(
+        "Number of overlapping peaks",
+        label=comma,
+    ) +
+    mrv_grid() +
+    theme(
+
+    )
+my_ggsave("Figures/HG002-cross-mapped-peaks-overlap-histogram.pdf", width = 3, height = 2)
+```
+
+
+# plot the ecdf of average reciprocal overlap
+```{r}
+z=peak_overlaps %>%
+    filter(
+        n_peaks_on_other_hap > 0
+    ) %>%
+    bind_rows(
+        self_overlap
+    ) %>%
+    mutate(
+        case = case_when(
+            n_peaks_on_other_hap == 1 ~ "one overlapping peak",
+            n_peaks_on_other_hap > 1 ~ "multiple overlapping peaks",
+            TRUE ~ "no overlapping peaks"
+        ),
+    )
+table(z$haplotype)
+z %>%
+    ggplot(
+        aes(
+            x = average_reciprocal_overlap,
+            color = haplotype,
+        )
+    ) +
+    stat_ecdf(alpha=0.75, geom = "step", pad=FALSE) +
+    # add an x=y line
+    geom_line(
+        data = data.frame(x=seq(0,1,0.01), y=seq(0,1,0.01)),
+        aes(x=x, y=y, color=NULL),
+        linetype = "dashed",
+        linewidth=0.2,
+        color = "gray50"
+    ) + 
+    #geom_histogram(binwidth = 0.02,position = "dodge") +
+    scale_y_continuous(
+        "Percent of peaks with at least\nthis reciprocal overlap",
+        #trans="log10",
+        label=percent,
+    ) + #annotation_logticks(sides="l") +
+    scale_color_manual("",
+        values = hap_colors,
+    ) +
+    scale_x_continuous(
+        "Average reciprocal overlap with cross-mapped peaks",
+        label=percent,
+    ) +
+    mrv_grid() +
+    facet_col(
+        ~case,
+        #scales = "free_y",
+    ) + 
+    theme(
+
+    )
+my_ggsave(
+    "Figures/HG002-cross-mapped-peaks-average-reciprocal-overlap-histogram.pdf", 
+    width = 3, height = 2
+)
+```
+
+### This is the big dataset
+```{r}
+overlap_summary = peak_overlaps %>%
+    group_by(haplotype) %>%
+    summarise(
+        n_peaks = n(),
+        no_overlap = sum(n_peaks_on_other_hap == 0),
+        one_overlap = sum(n_peaks_on_other_hap == 1),
+        multiple_overlap = sum(n_peaks_on_other_hap > 1),
+        hap_selective = sum(is_hap_selective),
+        frac_no_overlap = no_overlap / n_peaks,
+        frac_one_overlap = one_overlap / n_peaks,
+        frac_multiple_overlap = multiple_overlap / n_peaks,
+        frac_hap_selective = hap_selective / n_peaks
+    ) 
+overlap_summary_long = overlap_summary %>%
+    pivot_longer(
+        cols = -haplotype,
+        names_to = "metric",
+        values_to = "value"
+    ) 
+overlap_summary
+
+# write table
+overlap_summary %>% fwrite(
+    "Tables/HG002-cross-mapped-peaks-overlap-summary.tsv",
+    sep="\t",
+    quote=FALSE,
+    row.names=FALSE,
+    col.names=TRUE
+)
+```
+
+```{r}
+hg002_df %>% 
+    filter(source == "DIP-DSA") %>%
+    filter(!grepl("chrX|chrY", chrom)) %>%
+    group_by(source, haplotype) %>% 
+    summarise(n=n()) 
+
+```

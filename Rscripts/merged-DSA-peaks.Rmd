@@ -1,0 +1,135 @@
+```{r}
+source("Rscripts/utils.R")
+````
+
+```{r}
+read_merged_fire_peaks = function(f, sample_name){
+    my_read_bed(hg0002_f) %>%
+        mutate(
+            sample = sample_name,
+            haplotype = case_when(
+                grepl("PATERNAL", chrom) | grepl("#1#", chrom) ~ "H1",
+                grepl("MATERNAL", chrom) | grepl("#2#", chrom) ~ "H2",
+                TRUE ~ "unknown" 
+            ),
+            autosome=case_when(
+                !grepl("chrX|chrY", chrom) ~ "Autosomes",
+                TRUE ~ "Sex chromosome"
+            ),
+        ) %>%
+        # split cir_id x.y.z into separate columns
+        separate(cre_id, 
+                into = c("peak_cluster", "cluster_count", "cluster_id"), 
+                sep = "\\.",
+                convert = T,
+                remove = F
+        ) %>%
+        data.table
+}
+
+# add HCSA to the peaks
+hcsa_caller = function(peaks){
+    peaks %>%
+        mutate(
+            ah1 = fire_coverage_H1,
+            nah1 = coverage_H1 - fire_coverage_H1,
+            ah2 = fire_coverage_H2,
+            nah2 = coverage_H2 - fire_coverage_H2
+        ) %>%
+        rowwise() %>%
+        mutate(
+            p_value = fisher.test(matrix(c(ah1, nah1, ah2, nah2), nrow=2))$p.value,
+            # if we are not in a 1-1 situation we cannot call HCSA
+            p_value = ifelse(cluster_count != 2, NA, p_value),
+        ) %>%
+        ungroup() %>%
+        group_by(haplotype, sample, autosome) %>%
+        mutate(
+            p_adjust = p.adjust(p_value, method = "BH")
+        ) %>%
+        # p_value and p_adjust to na if sex_chrom
+        mutate(
+            #p_value = ifelse(autosome=="Sex chromosome", NA, p_value),
+            #p_adjust = ifelse(autosome=="Sex chromosome", NA, p_adjust)
+        ) %>%
+        select(-ah1, -nah1, -ah2, -nah2) %>%
+        ungroup()
+}
+
+haplotype_distinct = function(peaks){
+    peaks %>% mutate(
+        haplotype_distinct = case_when(
+            p_adjust <= 0.05 & cluster_count == 2 ~ "Epigenetically haplotype-selective",
+            cluster_count == 2 ~ "Shared",
+            cluster_count == 1 ~ "Genetically haplotype-specific",
+            cluster_count > 2 ~ "Multiple to one",
+            TRUE ~ "unknown"
+        ),
+        peak_weight = case_when(
+            haplotype_distinct == "Genetically haplotype-specific" ~ 1,
+            TRUE ~ cluster_count / 2,
+        )
+    )
+}
+
+```
+
+```{r}
+hg0002_f = "/mmfs1/gscratch/stergachislab/minkinaa/results/hprc_graph_tests/HG002_InjSurj/FIRE/results/HG002_DSA/HG002_dsa_peaks_to_keep_w_CRE_ids.tsv"
+peaks=read_merged_fire_peaks(hg0002_f, "HG002") %>%
+    hcsa_caller() %>%
+    haplotype_distinct()
+peaks  
+```
+
+```{r}
+hdca_colors = c(
+    "Shared" = "#b3b3b3",
+    "Genetically haplotype-specific" = "#f0a500",
+    "Epigenetically haplotype-selective" = "#00a6ed",
+    "Multiple to one" = "#ff5733"
+)
+```
+
+
+# make a log scaled bar plot of counts per haplotype distinct category
+```{r}
+z=3
+peaks %>%
+    ungroup() %>%
+    select(
+        haplotype_distinct, peak_cluster, autosome, sample
+    ) %>% 
+    unique() %>%
+    ggplot(
+        aes(y=haplotype_distinct, fill=haplotype_distinct),
+    ) + 
+    geom_bar() +
+    scale_fill_manual(values=hdca_colors) +
+    # add a count to the end of each bar
+    geom_text(stat='count', 
+        aes(label=comma(..count..)),
+        position=position_stack(vjust=0.5), 
+        color="white", size=2
+    ) +
+    scale_x_continuous(
+        "# of regulatory elements",
+        limits=c(1, NA),
+        trans='log10', label=comma,
+    )  + 
+    annotation_logticks(
+        sides="b", outside = TRUE,
+        short = unit(0.1/z, "cm"),
+        mid = unit(0.2/z, "cm"),
+        long = unit(0.3/z, "cm"),
+        linewidth = 0.25,
+    ) + 
+    coord_cartesian(clip = "off") +
+    ylab("") +
+    my_grid() +
+    facet_col(~autosome)+
+    theme(
+        legend.position = "none",
+    ) 
+my_ggsave("Figures/merged-DSA-peaks-haplotype-distinct.pdf", width=3, height=2)
+```

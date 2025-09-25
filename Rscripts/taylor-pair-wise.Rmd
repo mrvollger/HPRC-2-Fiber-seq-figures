@@ -1,0 +1,51 @@
+```{r}
+library(ggplot2)
+library(tidyr)
+library(data.table)
+```
+
+```{r}
+df = as.tibble(fread("tmp.taylor.tbl")) %>%
+    filter(
+        #group != "1"
+        group == "2a"
+    )
+table(df$group)
+min(df$actuation)
+```
+
+```{r}
+groups = unique(df$peakID)
+results = c()
+for(group in groups){
+    tdf = df[df$peakID == group,]
+    actuations = tdf$actuation
+    # skip over one length groups
+    for(i in 1:length(actuations)){
+        i_act = actuations[i]
+        for(j in (i+1):length(actuations)){
+            j_act = actuations[j]
+            # make sure both are not 0 
+            # before getting the diff and adding to results
+            diff = abs(i_act - j_act)
+            results = c(results, diff)
+        }
+    }
+}
+results
+```
+
+
+```{r}
+data.table(diff=results, group="paralog") %>%
+    ggplot(aes(x=diff, fill=group)) +
+    geom_histogram(binwidth=0.01) +
+    theme_minimal() 
+my_ggsave("Figures/taylor-pair-wise-diff.pdf", width = 3, height = 2)
+```
+
+```{r}
+# load the diffs from the hap peaks from FIRE
+# take the abs values
+# then add them to the plot above
+```
