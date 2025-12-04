@@ -1,34 +1,98 @@
 ```{r}
 source("Rscripts/utils.R")
+
+shared_color <- "#888888"
+hap_distinct_color <- "#8b0000"
+complex_color <- "#ff5733"
+maternal_color <- "#5b9bd5"
+paternal_color <- "#fa6800"
+
+hdca_colors <- c(
+    "Maternal" = maternal_color,
+    "Paternal" = paternal_color,
+    "Shared" = shared_color,
+    "Haplotype-distinct" = hap_distinct_color,
+    "Epigenetically haplotype-selective" = "purple",
+    "Epigenetically haplotype-selective (25% difference)" = "#DA70D6",
+    "Epigenetically haplotype-selective (50% difference)" = "#BF40BF",
+    "Epigenetically haplotype-selective (75% difference)" = "#800080",
+    "Genetically haplotype-specific" = "#f0a500",
+    "Complex cluster" = complex_color
+)
+name_order <- rev(names(hdca_colors))
+
+all_manifest <- read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQANHblpVkMcVMWUvYas6JQl0pqvgeiYDlWwG2xV9vQdihgTsdWqHfl0z5BKb1I8hXcQtH1WIhwTkII/pub?output=csv") %>%
+    # filter(Individual_ID != "HG02275") %>%
+    filter(!is.na(dsg_fire_peaks)) %>%
+    filter(dsg_fire_peaks != "") %>%
+    # check that the files exist
+    filter(
+        file.exists(dsg_fire_peaks)
+    ) %>%
+    data.table()
+all_manifest %>%
+    as.tibble()
+f <- all_manifest$dsg_fire_peaks[2]
+all_manifest$dsg_fire_peaks
+
+all_SDs <- my_read_bed("/mmfs1/gscratch/stergachislab/HPRC/annotations/segdups/all-segdups-merged.bed.gz")
+
+all_chroms <- fread("/mmfs1/gscratch/stergachislab/HPRC/assemblies/allChromAlias.txt", header = F)
+colnames(all_chroms) <- c("chrom", "chrom_hg38", "chrom_ncbi")
+all_chroms
 ````
 
 ```{r}
-read_merged_fire_peaks = function(f, sample_name){
-    my_read_bed(hg0002_f) %>%
+# the power of detection in the weakest samples is 0.1428571
+MIN_FRAC_ACC <- 0.15
+
+read_merged_fire_peaks <- function(f, ID) {
+    k <- my_read_bed(f) %>%
+        # head(100) %>%
+        # add in the chrom_hg38 names
+        left_join(all_chroms, by = c("chrom")) %>%
         mutate(
-            sample = sample_name,
+            ID = ID,
             haplotype = case_when(
                 grepl("PATERNAL", chrom) | grepl("#1#", chrom) ~ "H1",
                 grepl("MATERNAL", chrom) | grepl("#2#", chrom) ~ "H2",
-                TRUE ~ "unknown" 
+                TRUE ~ "unknown"
             ),
-            autosome=case_when(
-                !grepl("chrX|chrY", chrom) ~ "Autosomes",
-                TRUE ~ "Sex chromosome"
+            autosome = case_when(
+                grepl("chrX|chrY", chrom) | grepl("chrX|chrY", chrom_hg38) ~ "Sex chromosome",
+                TRUE ~ "Autosomes",
             ),
+            diff = fire_coverage_H1 / coverage_H1 - fire_coverage_H2 / coverage_H2,
+            pass_hap_coverage = ifelse(coverage_H1 >= 10 & coverage_H2 >= 10, TRUE, FALSE),
         ) %>%
-        # split cir_id x.y.z into separate columns
-        separate(cre_id, 
-                into = c("peak_cluster", "cluster_count", "cluster_id"), 
-                sep = "\\.",
-                convert = T,
-                remove = F
+        # separte ID in three cols and keep the original ID
+        separate(ID, into = c("Sample", "PS", "Technology"), sep = "_", remove = F) %>%
+        # split cre_id x.y.z into separate columns
+        separate(cre_id,
+            into = c("peak_cluster", "cluster_count", "cluster_id"),
+            sep = "\\.",
+            convert = T,
+            remove = F
         ) %>%
-        data.table
+        group_by(peak_cluster, ID) %>%
+        mutate(
+            max_fire_cluster = max(fire_coverage / coverage),
+        ) %>%
+        ungroup() %>%
+        filter(
+            max_fire_cluster >= MIN_FRAC_ACC
+        ) %>%
+        bed_map(
+            all_SDs,
+            is_SD = n() > 0,
+        ) %>%
+        replace_na(list(is_SD = FALSE)) %>%
+        data.table()
+    k
 }
 
 # add HCSA to the peaks
-hcsa_caller = function(peaks){
+hcsa_caller <- function(peaks) {
     peaks %>%
         mutate(
             ah1 = fire_coverage_H1,
@@ -38,98 +102,766 @@ hcsa_caller = function(peaks){
         ) %>%
         rowwise() %>%
         mutate(
-            p_value = fisher.test(matrix(c(ah1, nah1, ah2, nah2), nrow=2))$p.value,
+            p_value = fisher.test(matrix(c(ah1, nah1, ah2, nah2), nrow = 2))$p.value,
             # if we are not in a 1-1 situation we cannot call HCSA
             p_value = ifelse(cluster_count != 2, NA, p_value),
+            # remove hap selectivity if we dont have coverage
+            p_value = ifelse(coverage_H1 < 10 & coverage_H2 < 10, NA, p_value),
         ) %>%
         ungroup() %>%
-        group_by(haplotype, sample, autosome) %>%
+        group_by(haplotype, ID, autosome) %>%
         mutate(
             p_adjust = p.adjust(p_value, method = "BH")
         ) %>%
         # p_value and p_adjust to na if sex_chrom
         mutate(
-            #p_value = ifelse(autosome=="Sex chromosome", NA, p_value),
-            #p_adjust = ifelse(autosome=="Sex chromosome", NA, p_adjust)
+            # p_value = ifelse(autosome=="Sex chromosome", NA, p_value),
+            # p_adjust = ifelse(autosome=="Sex chromosome", NA, p_adjust)
         ) %>%
         select(-ah1, -nah1, -ah2, -nah2) %>%
         ungroup()
 }
 
-haplotype_distinct = function(peaks){
+haplotype_distinct <- function(peaks) {
     peaks %>% mutate(
         haplotype_distinct = case_when(
-            p_adjust <= 0.05 & cluster_count == 2 ~ "Epigenetically haplotype-selective",
+            p_value <= 0.05 & cluster_count == 2 & abs(diff) >= 0.25 ~ "Epigenetically haplotype-selective",
             cluster_count == 2 ~ "Shared",
             cluster_count == 1 ~ "Genetically haplotype-specific",
-            cluster_count > 2 ~ "Multiple to one",
+            cluster_count > 2 ~ "Complex cluster",
             TRUE ~ "unknown"
         ),
+        haplotype_distinct = factor(haplotype_distinct, levels = name_order),
+        haplotype_distinct_2 = case_when(
+            haplotype_distinct == "Epigenetically haplotype-selective" & abs(diff) >= 0.75 ~ "Epigenetically haplotype-selective (75% difference)",
+            haplotype_distinct == "Epigenetically haplotype-selective" & abs(diff) >= 0.50 ~ "Epigenetically haplotype-selective (50% difference)",
+            haplotype_distinct == "Epigenetically haplotype-selective" & abs(diff) >= 0.25 ~ "Epigenetically haplotype-selective (25% difference)",
+            TRUE ~ as.character(haplotype_distinct)
+        ),
+        haplotype_distinct_2 = factor(haplotype_distinct_2, levels = name_order),
         peak_weight = case_when(
             haplotype_distinct == "Genetically haplotype-specific" ~ 1,
-            TRUE ~ cluster_count / 2,
+            cluster_count == 2 ~ 0.5,
+            TRUE ~ (cluster_count - 1) / cluster_count,
         )
     )
 }
-
 ```
 
-```{r}
-hg0002_f = "/mmfs1/gscratch/stergachislab/minkinaa/results/hprc_graph_tests/HG002_InjSurj/FIRE/results/HG002_DSA/HG002_dsa_peaks_to_keep_w_CRE_ids.tsv"
-peaks=read_merged_fire_peaks(hg0002_f, "HG002") %>%
-    hcsa_caller() %>%
-    haplotype_distinct()
-peaks  
-```
+
 
 ```{r}
-hdca_colors = c(
-    "Shared" = "#b3b3b3",
-    "Genetically haplotype-specific" = "#f0a500",
-    "Epigenetically haplotype-selective" = "#00a6ed",
-    "Multiple to one" = "#ff5733"
+load <- TRUE
+load <- FALSE
+
+if (load) {
+    peaks <- fread("Tables/All-DSG-peaks.tsv.gz")
+} else {
+    library(parallel)
+    num_cores <- 32
+    cl <- makeCluster(num_cores)
+    clusterEvalQ(cl, c(library(data.table), library(dplyr), library(tidyr), library(valr)))
+    clusterExport(cl, varlist = c("read_merged_fire_peaks", "hcsa_caller", "haplotype_distinct", "MIN_FRAC_ACC", "hdca_colors", "name_order", "all_manifest", "my_read_bed", "all_SDs", "all_chroms"))
+
+    peaks <- bind_rows(
+        parLapply(cl, (1:nrow(all_manifest)), function(i) {
+            tdf <- all_manifest$dsg_fire_peaks[i]
+            ID <- all_manifest$ID[i]
+            read_merged_fire_peaks(tdf, ID) %>%
+                hcsa_caller() %>%
+                haplotype_distinct()
+        })
+    )
+    stopCluster(cl)
+
+
+    peaks_distinct <- peaks %>%
+        distinct() %>%
+        group_by(peak_id) %>%
+        mutate(
+            is_peak_id_unique = n() == 1
+        ) %>%
+        filter(is_peak_id_unique) %>%
+        select(-is_peak_id_unique)
+
+
+    # make the hg38 full hg38 peak set
+    dsg_fire_peaks_to_hg38 <- all_manifest %>%
+        filter(file.exists(fire_peaks_dsa_to_hg38)) %>%
+        pull(fire_peaks_dsa_to_hg38)
+    all_peak_files_38 <- paste0(dsg_fire_peaks_to_hg38, collapse = " ")
+    # cat all the fire peaks into one table to be read in the next chunk
+    system(paste0("head -n 1 ", dsg_fire_peaks_to_hg38[1], " | bgzip -@ 32 > Tables/Raw-all-38.bed.gz"))
+    # cat all the files without the header and append to the output file
+    system(paste0("cat ", all_peak_files_38, " | grep -wv 'nuc_coverage' | bgzip -@ 32 >> Tables/Raw-all-38.bed.gz"))
+
+    # make the chm13 full chm13 peak set
+    dsg_fire_peaks_to_chm13 <- all_manifest %>%
+        filter(file.exists(fire_peaks_dsa_to_chm13)) %>%
+        pull(fire_peaks_dsa_to_chm13)
+    all_peak_files_chm13 <- paste0(dsg_fire_peaks_to_chm13, collapse = " ")
+    # cat all the fire peaks into one table to be read in the
+    system(paste0("head -n 1 ", dsg_fire_peaks_to_chm13[1], " | bgzip -@ 32 > Tables/Raw-all-chm13.bed.gz"))
+    # cat all the files without the header and append to the output file
+    system(paste0("cat ", all_peak_files_chm13, " | grep -wv 'nuc_coverage' | bgzip -@ 32 >> Tables/Raw-all-chm13.bed.gz"))
+
+    # read in the full peak sets
+    hg38 <- my_read_bed("Tables/Raw-all-38.bed.gz") %>%
+        filter(peak_id %in% peaks_distinct$peak_id) %>%
+        select(chrom, start, end, peak_id) %>%
+        rename(
+            hg38_chrom = chrom,
+            hg38_start = start,
+            hg38_end = end
+        ) %>%
+        distinct() %>%
+        data.table()
+
+    chm13 <- my_read_bed("Tables/Raw-all-chm13.bed.gz") %>%
+        filter(peak_id %in% peaks_distinct$peak_id) %>%
+        select(chrom, start, end, peak_id) %>%
+        rename(
+            chm13_chrom = chrom,
+            chm13_start = start,
+            chm13_end = end
+        ) %>%
+        distinct() %>%
+        data.table()
+
+
+    peaks_m <- peaks_distinct %>%
+        merge(
+            hg38,
+            by = "peak_id",
+            all.x = TRUE,
+        ) %>%
+        merge(
+            chm13,
+            by = "peak_id",
+            all.x = TRUE,
+        ) %>%
+        # move the peak_id column to the end
+        select(-peak_id, everything(), peak_id)
+
+    nrow(peaks_m) - nrow(peaks_distinct)
+
+    peaks <- peaks_m
+
+    fwrite(peaks, "Tables/All-DSG-peaks.tsv.gz", sep = "\t", quote = F, row.names = F)
+
+    # now write a chm13 version moving those columns to the front
+    peaks %>%
+        select(chm13_chrom, chm13_start, chm13_end, everything()) %>%
+        filter(!is.na(chm13_chrom)) %>%
+        fwrite("Tables/All-DSG-peaks-chm13.tsv.gz", sep = "\t", quote = F, row.names = F)
+
+    # now write a hg38 version moving those columns to the front
+    peaks %>%
+        select(hg38_chrom, hg38_start, hg38_end, everything()) %>%
+        filter(!is.na(hg38_chrom)) %>%
+        fwrite("Tables/All-DSG-peaks-hg38.tsv.gz", sep = "\t", quote = F, row.names = F)
+}
+```
+
+# quick per sample counts of SD, autosome 
+```{r}
+peaks %>%
+    group_by(ID) %>%
+    summarise(
+        n = n(),
+        n_autosome = sum(autosome == "Autosomes"),
+        n_sex = sum(autosome != "Autosomes"),
+        n_sd = sum(is_SD),
+        percent_sd = 100 * n_sd / n,
+        mean_coverage = mean(coverage),
+        median_coverage = median(coverage)
+    )
+```
+
+# get hsca counts
+```{r}
+# sig at 0.25 .5 and .75 or sig at 0.33 and 0.66
+hg002_sig_hcsa_diff <- peaks %>%
+    filter(autosome == "Autosomes") %>%
+    filter(cluster_count == 2) %>%
+    filter(ID == "HG002", pass_coverage) %>%
+    filter(p_adjust <= 0.05) %>%
+    # filter(p_adjust == max(p_adjust)) %>%
+    mutate(
+        diff = abs(fire_coverage_H1 / coverage_H1 - fire_coverage_H2 / coverage_H2),
+    ) %>%
+    summarise(
+        n = n(),
+        mean_diff = mean(diff),
+        median_diff = median(diff),
+        min_diff = min(diff),
+        max_diff = max(diff),
+    ) %>%
+    pull(median_diff)
+
+# hg002_sig_hcsa_diff = 0.25
+
+peaks %>%
+    filter(autosome == "Autosomes") %>%
+    filter(cluster_count == 2) %>%
+    # filter(ID != "HG002", pass_coverage) %>%
+    group_by(ID) %>%
+    mutate(
+        nominal = p_value <= 0.05,
+        has_diff = (abs(diff) >= hg002_sig_hcsa_diff & pass_hap_coverage) | p_adjust <= 0.05,
+    ) %>%
+    summarise(
+        n = n(),
+        n_sig_genome_wide = sum(p_adjust <= 0.05, na.rm = TRUE),
+        n_nominal = sum(nominal, na.rm = TRUE),
+        percent_nominal = 100 * n_nominal / n,
+        by_hg002_diff = sum(has_diff, na.rm = TRUE),
+        percent_by_diff = 100 * by_hg002_diff / n,
+        nominal_and_diff = sum(nominal & has_diff, na.rm = TRUE),
+        percent_nominal_and_diff = 100 * nominal_and_diff / n,
+        nominal_or_diff = sum(nominal | has_diff, na.rm = TRUE),
+        percent_nominal_or_diff = 100 * nominal_or_diff / n,
+        mean_coverage = mean(coverage),
+        median_coverage = median(coverage)
+    )
+```
+
+
+# plot the distributions of fire coverage on H1 and H2 
+```{r}
+peaks %>%
+    filter(autosome == "Autosomes", ID == "HG002") %>%
+    filter(cluster_count == 2) %>%
+    ggplot(aes(x = fire_coverage_H1, y = fire_coverage_H2)) +
+    # geom_point(alpha=0.5, size=0.5) +
+    geom_hex(bins = 50) +
+    scale_fill_distiller("", palette = "Spectral", trans = "log10") +
+    scale_x_continuous("H1 DSA coverage") +
+    scale_y_continuous("H2 DSA coverage") +
+    geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
+    facet_col(~ID, scales = "free") +
+    my_grid()
+my_ggsave("Figures/merged-DSA-peaks-hcsa-scatter.pdf", width = 3, height = 4)
+
+peaks %>%
+    group_by(ID, autosome) %>%
+    summarise(
+        n = n(),
+        min_p = min(p_value, na.rm = TRUE),
+        n_nominal = sum(p_value <= 0.05, na.rm = TRUE),
+        n_sig = sum(p_adjust <= 0.05, na.rm = TRUE),
+        mean(coverage),
+        median(coverage)
+    )
+```
+
+# per sample make a plot of p_values for haplotype selectivity
+```{r}
+peaks %>%
+    filter(autosome == "Autosomes") %>%
+    filter(ID == "HG002") %>%
+    filter(cluster_count == 2) %>%
+    ggplot(aes(x = p_adjust)) +
+    geom_histogram(binwidth = 0.01, fill = "grey", color = "black") +
+    scale_x_continuous("Fisher's exact test p-value", limits = c(0, 1)) +
+    scale_y_continuous("Count", trans = "log10") +
+    facet_col(~ID, scales = "free_y") +
+    my_grid()
+my_ggsave("Figures/merged-DSA-peaks-hcsa-pvalues.pdf", width = 3, height = 1)
+```
+
+# make a log scaled bar plot of counts per haplotype distinct category
+```{r}
+z <- 3
+summary <- peaks %>%
+    filter(
+        # ID == "HG002"
+    ) %>%
+    group_by(ID, autosome) %>%
+    mutate(
+        mean_coverage = mean(coverage),
+    ) %>%
+    group_by(haplotype_distinct, haplotype_distinct_2, autosome, ID, mean_coverage, Technology) %>%
+    dplyr::summarise(
+        n_adj = sum(peak_weight),
+        n_cluster = length(unique(peak_cluster)),
+        n = n(),
+    ) %>%
+    mutate(
+        to_use = case_when(
+            haplotype_distinct == "Complex cluster" ~ n_adj,
+            TRUE ~ n_cluster,
+        )
+    ) %>%
+    ungroup() %>%
+    group_by(ID) %>%
+    mutate(
+        total_n = sum(to_use),
+        frac = to_use / total_n,
+    ) %>%
+    data.table()
+
+summary %>%
+    filter(
+        haplotype_distinct != "Shared",
+        autosome == "Autosomes",
+        ID == "HG002",
+    ) %>%
+    ggplot(
+        aes(y = haplotype_distinct, fill = haplotype_distinct_2, x = to_use),
+    ) +
+    geom_bar(stat = "identity") +
+    # add a count to the end of each bar
+    geom_text(
+        data = . %>% group_by(ID, haplotype_distinct) %>%
+            summarise(
+                to_use = sum(to_use),
+                frac = sum(frac),
+                label = paste0(comma(to_use), " (", round(100 * frac, 1), "%)")
+            ),
+        aes(x = 0, label = label, group = haplotype_distinct, fill = NULL, color = NULL),
+        position = position_stack(vjust = 0.5),
+        hjust = -0.1,
+        color = "black", size = 2
+    ) +
+    scale_fill_manual(values = hdca_colors) +
+    scale_x_continuous(
+        "# of regulatory elements",
+        # limits=c(1, NA),
+        # trans='log10',
+        label = comma,
+    ) +
+    # annotation_logticks(
+    #    sides="b", outside = TRUE,
+    #    short = unit(0.1/z, "cm"),
+    #    mid = unit(0.2/z, "cm"),
+    #    long = unit(0.3/z, "cm"),
+    #    linewidth = 0.25,
+    # ) + coord_cartesian(clip = "off") +
+    ylab("") +
+    my_grid() +
+    facet_col(~ID) +
+    theme(
+        legend.position = "none",
+    )
+my_ggsave("Figures/merged-DSA-peaks-haplotype-distinct.pdf", width = 3, height = 1)
+```
+
+# make a pie chart of the same data
+```{r}
+summary %>%
+    filter(
+        autosome == "Autosomes",
+        ID == "HG002",
+    ) %>%
+    mutate(
+        haplotype_distinct = case_when(
+            haplotype_distinct == "Shared" ~ "Shared",
+            TRUE ~ "Haplotype-distinct"
+        )
+    ) %>%
+    group_by(haplotype_distinct, autosome) %>%
+    summarise(
+        to_use = sum(to_use)
+    ) %>%
+    ungroup() %>%
+    mutate(
+        percent = 100 * to_use / sum(to_use),
+        label = paste0(
+            "n=", comma(to_use),
+            "\n",
+            round(percent, 1), "%"
+        )
+    ) %>%
+    ggplot(aes(x = "", y = to_use, fill = haplotype_distinct)) +
+    geom_col() +
+    coord_polar(theta = "y", start = pi / 2) +
+    geom_text(
+        aes(label = label),
+        position = position_stack(vjust = 0.5),
+        size = 1.5, color = "white"
+    ) +
+    scale_fill_manual("",
+        values = hdca_colors
+    ) +
+    # two columns for legend
+    guides(fill = guide_legend(ncol = 1)) +
+    theme_void(base_size = 6) +
+    theme(
+        legend.position = "top",
+        legend.key.size = unit(0.2, "cm"),
+    )
+my_ggsave("Figures/merged-DSA-peaks-haplotype-distinct-pie.pdf", width = 1, height = 1.2)
+```
+
+
+# a beeswarm with 40 points around 
+```{r}
+set.seed(2)
+
+summary %>%
+    group_by(ID) %>%
+    filter(
+        autosome == "Autosomes",
+        haplotype_distinct != "Shared",
+    ) %>%
+    summarise(
+        y = sum(frac)
+    ) %>%
+    ggplot(aes(x = "", y = y)) +
+    geom_violin(
+        fill = "grey", color = NA, alpha = 0.5,
+        adjust = 1.5, scale = "width", width = 0.3
+    ) +
+    geom_quasirandom(
+        aes(y = y),
+        groupOnX = FALSE,
+        width = 0.1,
+        alpha = 0.5,
+        size = 1,
+        color = hap_distinct_color
+    ) +
+    scale_y_continuous(
+        "REs that are haplotype-distinct",
+        limits = c(0, NA),
+        labels = scales::percent_format(accuracy = 1)
+    ) +
+    xlab("HPRC Fiber-seq pilot samples") +
+    my_grid()
+
+my_ggsave(
+    "Figures/merged-DSA-peaks-haplotype-distinct-beeswarm.pdf",
+    width = 1.5,
+    height = 2
+)
+```
+
+# plot perrcent hap distinct REs vs mean coverage
+```{r}
+summary %>%
+    group_by(ID, haplotype_distinct, mean_coverage) %>%
+    filter(ID != "HG002") %>%
+    filter(
+        autosome == "Autosomes",
+        haplotype_distinct != "Shared",
+    ) %>%
+    summarise(
+        percent_hap_distinct = sum(frac),
+    ) %>%
+    ggplot(aes(x = mean_coverage, y = percent_hap_distinct)) +
+    stat_cor(method = "pearson", size = 2) +
+    geom_point(size = 2, color = hap_distinct_color, alpha = 0.7) +
+    scale_x_continuous("Mean DSA coverage") +
+    scale_y_continuous(
+        "REs that are haplotype-distinct",
+        labels = percent
+    ) +
+    facet_col(~haplotype_distinct, scales = "free_y") +
+    my_grid()
+my_ggsave(
+    "Figures/merged-DSA-peaks-haplotype-distinct-vs-coverage.pdf",
+    width = 2,
+    height = 3
 )
 ```
 
 
-# make a log scaled bar plot of counts per haplotype distinct category
+# number of RE per sample 
 ```{r}
-z=3
-peaks %>%
-    ungroup() %>%
-    select(
-        haplotype_distinct, peak_cluster, autosome, sample
-    ) %>% 
-    unique() %>%
+summary %>%
+    filter(
+        autosome == "Autosomes",
+        # ID != "HG002",
+    ) %>%
+    group_by(ID, total_n, mean_coverage, Technology) %>%
+    summarise(
+        n = unique(total_n),
+    ) %>%
+    ggplot(aes(x = "", y = n)) +
+    geom_violin(
+        fill = "grey", color = NA, alpha = 0.5,
+        adjust = 1.5, scale = "width", width = 0.3
+    ) +
+    geom_quasirandom(
+        groupOnX = FALSE,
+        width = 0.1,
+        alpha = 0.5,
+        size = 1,
+    ) +
+    scale_y_continuous(
+        "# of regulatory elements",
+        limits = c(0, NA),
+        labels = comma
+    ) +
+    xlab("HPRC Fiber-seq pilot samples") +
+    my_grid()
+
+my_ggsave(
+    "Figures/merged-DSA-peaks-total-peaks.pdf",
+    width = 1.6,
+    height = 2
+)
+```
+
+# plot number that interesect SDs
+```{r}
+sd_df <- peaks %>%
+    filter(ID != "HG002") %>%
+    group_by(ID) %>%
+    # filter(autosome == "Autosomes") %>%
+    summarise(
+        n_sd = length(unique(peak_cluster[is_SD])),
+        n_total = length(unique(peak_cluster)),
+        frac_sd = n_sd / n_total,
+        total_hap_distinct = length(unique(peak_cluster[haplotype_distinct != "Shared"])),
+        n_sd_and_hap_distinct = length(unique(peak_cluster[is_SD & haplotype_distinct != "Shared"])),
+        frac_sd_and_hap_distinct = n_sd_and_hap_distinct / n_sd,
+        n_sd_and_complex = length(unique(peak_cluster[is_SD & cluster_count > 2])),
+        frac_sd_and_complex = n_sd_and_complex / n_sd,
+        n_sd_and_shared = length(unique(peak_cluster[is_SD & cluster_count == 2])),
+        frac_sd_and_shared = n_sd_and_shared / n_sd,
+        n_sd_and_genetic = length(unique(peak_cluster[is_SD & cluster_count == 1])),
+        frac_sd_and_genetic = n_sd_and_genetic / n_sd,
+        n_sd_and_epigenetic = length(unique(peak_cluster[is_SD & haplotype_distinct == "Epigenetically haplotype-selective"])),
+        frac_sd_and_epigenetic = n_sd_and_epigenetic / n_sd,
+    )
+sd_df
+```
+
+# plot the frac total with SDs
+````{r}
+# beeswarm
+sd_df %>%
+    ggplot(aes(x = "", y = frac_sd)) +
+    geom_violin(
+        fill = "grey", color = NA, alpha = 0.5,
+        adjust = 1.5, scale = "width", width = 0.3
+    ) +
+    geom_quasirandom(
+        color = "darkred",
+        width = 0.1,
+        alpha = 0.5,
+        size = 1,
+    ) +
+    scale_y_continuous(
+        "REs that intersect SDs",
+        limits = c(0, NA),
+        labels = percent
+    ) +
+    xlab("HPRC Fiber-seq pilot samples") +
+    my_grid()
+my_ggsave(
+    "Figures/merged-DSA-peaks-SD-frac.pdf",
+    width = 1.5,
+    height = 2
+)
+```
+
+# what fraction of SD REs are haplotype distinct
+```{r}
+# readable names for the three categories
+sd_names <- c(
+    `Complex cluster` = "frac_sd_and_complex",
+    `Epigenetically haplotype-selective` = "frac_sd_and_epigenetic",
+    `Genetically haplotype-specific` = "frac_sd_and_genetic",
+    `Haplotype-distinct` = "frac_sd_and_hap_distinct"
+)
+# file the names and values in sd_names
+sd_names_flip <- setNames(names(sd_names), sd_names)
+
+sd_df %>%
+    # I want to pivot the data longer so I can show
+    # frac_sd_and_complex
+    # frac_sd_and_genetic
+    # frac_sd_and_hap_distinct
+    # in the same plot
+    pivot_longer(
+        cols = c(frac_sd_and_complex, frac_sd_and_genetic, frac_sd_and_hap_distinct, frac_sd_and_epigenetic),
+        names_to = "type",
+        values_to = "value"
+    ) %>%
+    # use the sd_names to rename the types
+    mutate(
+        type = sd_names_flip[type],
+        type = factor(type, levels = rev(names(sd_names)))
+    ) %>%
     ggplot(
-        aes(y=haplotype_distinct, fill=haplotype_distinct),
-    ) + 
-    geom_bar() +
-    scale_fill_manual(values=hdca_colors) +
-    # add a count to the end of each bar
-    geom_text(stat='count', 
-        aes(label=comma(..count..)),
-        position=position_stack(vjust=0.5), 
-        color="white", size=2
+        aes(x = value, y = type, color = type),
+    ) +
+    geom_violin(
+        fill = "grey", color = NA, alpha = 0.5,
+        adjust = 1.5, scale = "width", width = 0.5
+    ) +
+    geom_quasirandom(
+        width = 0.25,
+        alpha = 0.5,
+        size = 1,
+        # orientation = 'x',
+    ) +
+    # add the median in text
+    geom_text_repel(
+        data = . %>%
+            group_by(type) %>%
+            summarise(median_frac = median(value, na.rm = TRUE)) %>%
+            mutate(label = paste0("", round(100 * median_frac, 1), "%")),
+        aes(x = median_frac, label = label),
+        min.segment.length = 0,
+        nudge_y = 0.5,
+        color = "black",
+        size = 2
+    ) +
+    scale_y_discrete(
+        "",
     ) +
     scale_x_continuous(
-        "# of regulatory elements",
-        limits=c(1, NA),
-        trans='log10', label=comma,
-    )  + 
-    annotation_logticks(
-        sides="b", outside = TRUE,
-        short = unit(0.1/z, "cm"),
-        mid = unit(0.2/z, "cm"),
-        long = unit(0.3/z, "cm"),
-        linewidth = 0.25,
-    ) + 
-    coord_cartesian(clip = "off") +
-    ylab("") +
+        "% of SD REs that are haplotype-distinct",
+        limits = c(0, NA),
+        labels = percent
+    ) +
+    scale_color_manual(
+        values = hdca_colors,
+    ) +
     my_grid() +
-    facet_col(~autosome)+
+    # remove the color legend
     theme(
-        legend.position = "none",
-    ) 
-my_ggsave("Figures/merged-DSA-peaks-haplotype-distinct.pdf", width=3, height=2)
+        legend.position = "none"
+    )
+my_ggsave(
+    "Figures/merged-DSA-peaks-SD-haplotype-distinct-frac.pdf",
+    width = 3,
+    height = 1.5
+)
+# discreate scale for y axis
+```
+
+
+### for all peaks plot the density distibution of diff, but color by SD status
+```{r}
+peaks %>%
+    filter(autosome == "Autosomes") %>%
+    filter(cluster_count == 2) %>%
+    group_by(ID) %>%
+    # sample_n(50000) %>%
+    ggplot(aes(x = diff, fill = is_SD)) +
+    geom_density(alpha = 0.5, adjust = 1) +
+    scale_x_continuous(
+        "Difference in accessibility between haplotypes"
+    ) +
+    scale_y_continuous("Density") +
+    scale_fill_manual("Intersects SD", values = c("TRUE" = "darkred", "FALSE" = "black")) +
+    my_grid()
+
+my_ggsave("Figures/merged-DSA-peaks-diff-SD-vs-unique.pdf", width = 3, height = 2)
+```
+
+# percent accesibility of SDs vs not SDs as a ecdf
+```{r}
+peaks %>%
+    # filter(autosome == "Autosomes") %>%
+    # filter(cluster_count == 2) %>%
+    group_by(is_SD) %>%
+    sample_n(50000) %>%
+    ggplot(aes(x = fire_coverage / coverage, color = is_SD)) +
+    stat_ecdf(
+        aes(
+            # y=1 - ..y..
+        ),
+        linewidth = 0.75,
+        alpha = 0.75,
+    ) +
+    scale_x_continuous(
+        "% actuation of regulatory elements",
+        labels = percent,
+    ) +
+    scale_y_continuous(
+        "Cumulative % of regulatory elements",
+        labels = percent,
+    ) +
+    scale_color_manual("Intersects SD", values = c("TRUE" = "darkred", "FALSE" = "black")) +
+    my_grid() +
+    theme(
+        legend.position = "top"
+    )
+
+my_ggsave("Figures/merged-DSA-peaks-ecdf-SD-vs-unique.pdf", width = 2, height = 2)
+```
+
+# same plot as above but just make it a density plot of % actuation
+```{r}
+peaks %>%
+    # filter(autosome == "Autosomes") %>%
+    # filter(cluster_count == 2) %>%
+    group_by(is_SD) %>%
+    sample_n(50000) %>%
+    ggplot(aes(x = fire_coverage / coverage, fill = is_SD)) +
+    geom_density(
+        alpha = 0.5,
+        adjust = 0.5
+    ) +
+    scale_x_continuous(
+        "% actuation of regulatory elements",
+        labels = percent,
+    ) +
+    scale_y_continuous(
+        "Density",
+    ) +
+    scale_fill_manual("Intersects SD", values = c("TRUE" = "darkred", "FALSE" = "black")) +
+    my_grid() +
+    theme(
+        legend.position = "top"
+    )
+my_ggsave("Figures/merged-DSA-peaks-density-SD-vs-unique.pdf", width = 2, height = 2)
+```
+
+# now I want to compare the size of the REs that intersect SDs vs not same density polt idea as above
+```{r}
+peaks %>%
+    # filter(autosome == "Autosomes") %>%
+    filter(cluster_count == 2) %>%
+    group_by(is_SD) %>%
+    sample_n(50000) %>%
+    ggplot(aes(x = end - start, fill = is_SD)) +
+    geom_density(
+        alpha = 0.5,
+        adjust = 0.5
+    ) +
+    scale_x_continuous(
+        "Size of regulatory elements (bp)",
+        labels = comma,
+        # limits=c(0, 1000)
+        trans = "log10",
+        limits = c(100, 1000)
+    ) +
+    annotation_logticks(sides = "b") +
+    scale_y_continuous(
+        "Density",
+    ) +
+    scale_fill_manual("Intersects SD", values = c("TRUE" = "darkred", "FALSE" = "black")) +
+    my_grid() +
+    theme(
+        legend.position = "top"
+    )
+my_ggsave("Figures/merged-DSA-peaks-density-SD-vs-unique-size.pdf", width = 2, height = 2)
+```
+
+
+# make a plot showing the fraction of haplotype-distinct REs that intersect SDs
+```{r}
+sd_df %>%
+    ggplot(
+        aes(y = ID, x = n_sd_and_hap_distinct / total_hap_distinct)
+    ) +
+    geom_bar(
+        stat = "identity",
+        fill = "darkred",
+        alpha = 0.7,
+    ) +
+    scale_x_continuous(
+        "Fraction of haplotype-distinct REs that intersect SDs",
+        limits = c(0, 1),
+        labels = percent
+    ) +
+    my_grid()
+
+my_ggsave("Figures/merged-DSA-peaks-frac-hap-distinct-in-SDs.pdf", width = 3, height = 2)
 ```

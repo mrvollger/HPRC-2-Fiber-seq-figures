@@ -72,3 +72,4 @@ r-hexbin = ">=1.28.5,<2"
 r-runner = { version = ">=0.4.4,<0.5", channel = "conda-forge" }
 r-lsa = { version = ">=0.73.3,<0.74", channel = "conda-forge" }
 r-devtools = ">=2.4.5,<3"
+r-doparallel = ">=1.0.17,<2"
