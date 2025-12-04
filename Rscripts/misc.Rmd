@@ -1,0 +1,74 @@
+```{r}
+source("Rscripts/utils.R")
+f="/mmfs1/gscratch/stergachislab/userprod/production/fibertools-pipeline/PacBio-Fiber-seq/PS31261/hg38/results/pipelines/fire-run/temp/PS31261/shuffle/v0.1-shuffled-pileup.bed.gz"
+f2=
+```
+
+```{r}
+df=fread(f)
+df
+df2 = df %>%
+    filter(coverage > 0 & coverage_shuffled > 0)
+```
+
+```{r}
+# make coverage and shuffle_coverage columns long
+cov = df2 %>%
+    select(coverage, coverage_shuffled) %>%
+    sample_n(1e6) %>%
+    pivot_longer(cols=c("coverage","coverage_shuffled"), names_to="type", values_to="cov") %>%
+    mutate(
+        cov = as.integer(cov),
+    )
+
+```
+
+```{r}
+# plot the covs as empirical CDFs
+ggplot(cov, aes(x=cov, color=type)) +
+    stat_ecdf(size=1) +
+    scale_x_continuous(limits=c(0,100)) +
+    my_grid()
+my_ggsave("Figures/misc/shuffled_coverage_ecdf.pdf", width=4, height=3)
+```
+
+```{r}
+# smae thing but as density plot
+ggplot(cov, aes(x=cov, color=type)) +
+    geom_density(size=1) +
+    scale_x_continuous(limits=c(0,100)) +
+    my_grid()
+my_ggsave("Figures/misc/shuffled_coverage_density.pdf", width=4,
+height=3)
+
+```
+
+# now I want to do the same analysis but with score 
+```{r}
+score = df2 %>%
+    filter(score >= 0 & score_shuffled >= 0) %>%
+    select(score, score_shuffled) %>%
+    sample_n(1e6) %>%
+    pivot_longer(cols=c("score","score_shuffled"), names_to="type", values_to="score") %>%
+    mutate(
+        score = as.numeric(score),
+    )
+```
+```{r}
+# plot the scores as empirical CDFs
+ggplot(score, aes(x=score, color=type)) +
+    stat_ecdf(size=1) +
+    scale_x_continuous(trans="log10") +
+    my_grid()
+my_ggsave("Figures/misc/shuffled_score_ecdf.pdf", width=4,
+height=3)
+```
+
+```{r}
+# smae thing but as density plot
+ggplot(score, aes(x=score, color=type)) +
+    geom_density(size=1) +
+    scale_x_continuous(trans="log10") +
+    my_grid()
+my_ggsave("Figures/misc/shuffled_score_density.pdf", width=4,height=3)
+```

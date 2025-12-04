@@ -1,0 +1,129 @@
+```{r}
+source("Rscripts/utils.R")
+black_list <- my_read_bed("/mmfs1/gscratch/stergachislab/sjn/data/blacklist/hg38-blacklist.v2.sort.bed")
+MIN_FRAC_ACC <- 0.15
+```
+
+# read manifest and make super tables
+```{r}
+# dsg_fire_peaks	fire_peaks_dsa_to_hg38
+tbl_url <- "https://docs.google.com/spreadsheets/d/e/2PACX-1vQANHblpVkMcVMWUvYas6JQl0pqvgeiYDlWwG2xV9vQdihgTsdWqHfl0z5BKb1I8hXcQtH1WIhwTkII/pub?gid=0&single=true&output=csv"
+
+manifest <- fread(tbl_url) %>%
+    filter(!is.na(dsa)) %>%
+    select(
+        ID, Individual_ID, PS, Platform,
+        dsg_fire_peaks, fire_peaks_dsa_to_hg38
+    ) %>%
+    filter(dsg_fire_peaks != "") %>%
+    filter(fire_peaks_dsa_to_hg38 != "") %>%
+    rowwise() %>%
+    mutate(
+        files_exists = file.exists(dsg_fire_peaks) & file.exists(fire_peaks_dsa_to_hg38)
+    ) %>%
+    as.tibble()
+
+table(manifest$files_exists)
+
+clean_manifest <- manifest %>%
+    filter(files_exists) %>%
+    select(-files_exists)
+```
+
+```{r}
+t <- my_read_bed(cmd = "bgzip -cd -@ 16 Tables/All-DSG-peaks.tsv.gz")
+peaks <- t %>%
+    dply::filter(ID %in% unique(clean_manifest$ID)) %>%
+    filter(autosome == "Autosomes")
+
+peaks_38 <- my_read_bed(cmd = "bgzip -cd -@ 16 Tables/All-DSG-peaks-hg38.tsv.gz") %>%
+    filter(peak_id %in% unique(peaks$peak_id))
+```
+
+```{r}
+peaks_38_f <- peaks_38 %>%
+    # sample_n(1e4) %>%
+    filter(
+        !grepl("chrX|chrY", chrom),
+    ) %>%
+    bed_map(
+        black_list,
+        in_blacklist = n() > 0,
+    ) %>%
+    replace_na(list(in_blacklist = FALSE)) %>%
+    filter(
+        !in_blacklist,
+    ) %>%
+    mutate(
+        # take value before first hash in peak_id
+        Sample = gsub("#.*", "", peak_id),
+        haplotype = case_when(
+            grepl("#1#", peak_id) ~ "H1",
+            grepl("#2#", peak_id) ~ "H2",
+            TRUE ~ "UNK",
+        ),
+    ) %>%
+    data.table()
+peaks_38_f
+```
+
+
+```{r}
+nrow(peaks)
+peaks_with_38_info <- peaks %>%
+    merge(
+        peaks_38_f %>%
+            select(peak_id, Sample, haplotype) %>%
+            mutate(
+                lifts_to_38 = TRUE
+            ),
+        by = c("peak_id", "Sample", "haplotype"),
+        all.x = TRUE
+    ) %>%
+    replace_na(list(
+        lifts_to_38 = FALSE
+    ))
+nrow(peaks_with_38_info)
+```
+
+```{r}
+lift_summary <- peaks_with_38_info %>%
+    group_by(Sample, PS, haplotype) %>%
+    summarise(
+        n_peaks = n(),
+        n_peaks_lift_38 = sum(lifts_to_38),
+        frac_lift_38 = n_peaks_lift_38 / n_peaks,
+    ) %>%
+    arrange(desc(frac_lift_38))
+```
+
+# plot lift summary as a violin with beswarm using ggrepel to plot the median 
+```{r}
+lift_summary %>%
+    mutate(
+        stat = 1 - frac_lift_38,
+    ) %>%
+    # filter(frac_lift_38 > 0) %>%
+    ggplot(aes(x = "", y = stat)) +
+    geom_violin(fill = "lightgray") +
+    # geom_jitter(width=0.1, size=2, alpha=0.7) +
+    geom_quasirandom(method = "pseudorandom", size = 2, alpha = 0.7) +
+    geom_label_repel(
+        data = . %>%
+            group_by() %>%
+            summarise(
+                median_stat = median(stat),
+            ),
+        aes(x = "", y = median_stat, label = paste0("Median: ", round(median_stat * 100, 2), "%")),
+        # nudge_x = 0.2,
+        size = 2,
+        min.segment.length = 0,
+    ) +
+    scale_y_continuous(
+        "% of regulatory elements\nnot lifting to GRCh38",
+        labels = scales::percent_format()
+    ) +
+    scale_x_discrete("") +
+    my_grid()
+my_ggsave("Figures/compare-to-38-fraction-peaks-not-lifting-to-38.pdf", width = 2, height = 2)
+```
