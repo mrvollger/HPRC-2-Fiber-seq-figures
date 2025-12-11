@@ -21,17 +21,25 @@ hdca_colors <- c(
 )
 name_order <- rev(names(hdca_colors))
 
-all_manifest <- read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQANHblpVkMcVMWUvYas6JQl0pqvgeiYDlWwG2xV9vQdihgTsdWqHfl0z5BKb1I8hXcQtH1WIhwTkII/pub?output=csv") %>%
-    # filter(Individual_ID != "HG02275") %>%
-    filter(!is.na(dsg_fire_peaks)) %>%
-    filter(dsg_fire_peaks != "") %>%
-    # check that the files exist
-    filter(
-        file.exists(dsg_fire_peaks)
+t_all_manifest <- read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQANHblpVkMcVMWUvYas6JQl0pqvgeiYDlWwG2xV9vQdihgTsdWqHfl0z5BKb1I8hXcQtH1WIhwTkII/pub?output=csv") %>%
+    filter(file.exists(dsa)) %>%
+    mutate(
+        has_peaks = file.exists(dsg_fire_peaks),
+        has_peaks_to_chm13 = file.exists(fire_peaks_dsa_to_chm13),
+        has_peaks_to_hg38 = file.exists(fire_peaks_dsa_to_hg38),
     ) %>%
     data.table()
-all_manifest %>%
-    as.tibble()
+
+t_all_manifest %>%
+    filter(!has_peaks) %>%
+    pull(ID)
+
+all_manifest <- t_all_manifest %>%
+    filter(has_peaks) %>%
+    filter(has_peaks_to_chm13) %>%
+    filter(has_peaks_to_hg38) %>%
+    data.table()
+
 f <- all_manifest$dsg_fire_peaks[2]
 all_manifest$dsg_fire_peaks
 
@@ -260,6 +268,29 @@ if (load) {
         select(hg38_chrom, hg38_start, hg38_end, everything()) %>%
         filter(!is.na(hg38_chrom)) %>%
         fwrite("Tables/All-DSG-peaks-hg38.tsv.gz", sep = "\t", quote = F, row.names = F)
+
+
+    # make a table by sample now
+    peaks %>%
+        arrange(ID, chrom, start, end) %>%
+        rename(
+            `#chrom` = chrom,
+        ) %>%
+        group_by(ID) %>%
+        do({
+            group_name <- unique(.$ID)
+            file_name <- paste0("Tables/by-sample/", group_name, ".peaks.bed.gz")
+            print(file_name)
+            fwrite(., file = file_name, sep = "\t", quote = F, row.names = F)
+            as.data.table(nrow(.))
+        })
+
+    # also want to save the all_manifest
+    fwrite(
+        all_manifest,
+        "Tables/sample-and-file-manifest.tsv",
+        sep = "\t", quote = F, row.names = F
+    )
 }
 ```
 

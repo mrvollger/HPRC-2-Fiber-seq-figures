@@ -1,4 +1,4 @@
-[project]
+[workspace]
 authors = ["Mitchell R. Vollger <mvollger@gmai.com>"]
 channels = ["conda-forge", "bioconda"]
 description = "Add a short description here"

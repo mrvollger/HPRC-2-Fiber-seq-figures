@@ -1,0 +1,17 @@
+```{r}
+source("Rscripts/utils.R")
+peaks <- my_read_bed(cmd = "bgzip -cd -@ 16 Tables/All-DSG-peaks.tsv.gz")
+```
+
+
+```{r}
+peaks %>%
+    group_by(is_SD) %>%
+    summarise(
+        total_n = n(),
+        shared = sum(haplotype_distinct == "Shared"),
+        distinct = sum(haplotype_distinct != "Shared"),
+        epi_distinct = sum(haplotype_distinct == "Epigenetically haplotype-selective"),
+        frac_epi_distinct = epi_distinct / distinct,
+    )
+```
