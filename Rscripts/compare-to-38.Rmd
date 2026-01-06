@@ -63,15 +63,21 @@ nrow(peaks_with_38_info)
 
 ```{r}
 lift_summary <- peaks_with_38_info %>%
-    group_by(Sample, PS, haplotype, Technology) %>%
+    group_by(ID, Sample, PS, haplotype, Technology) %>%
     summarise(
         n_peaks = n(),
+        n_blacklist = sum(in_blacklist),
+        frac_blacklist = n_blacklist / n_peaks,
+        n_no_lift = sum(is.na(hg38_start)),
+        frac_no_lift = n_no_lift / n_peaks,
         n_peaks_lift_38 = sum(lifts_to_38),
         frac_lift_38 = n_peaks_lift_38 / n_peaks,
         n_sd_peaks = sum(is_SD),
         n_sd_peaks_lift_38 = sum(is_SD & lifts_to_38),
         frac_sd_lift_38 = n_sd_peaks_lift_38 / n_sd_peaks,
-        frac_unlifted_that_are_sd = (n_sd_peaks - n_sd_peaks_lift_38) / (n_peaks - n_peaks_lift_38)
+        frac_unlifted = (n_peaks - n_peaks_lift_38) / n_peaks,
+        frac_unlifted_that_are_sd = (n_sd_peaks - n_sd_peaks_lift_38) / (n_peaks - n_peaks_lift_38),
+        test_sum = frac_lift_38 + frac_unlifted,
     ) %>%
     arrange(desc(frac_lift_38))
 ```
@@ -79,11 +85,15 @@ lift_summary <- peaks_with_38_info %>%
 # plot lift summary as a violin with beswarm using ggrepel to plot the median 
 ```{r}
 lift_summary %>%
+    filter(
+        !is.na(frac_sd_lift_38),
+    ) %>%
     mutate(
         frac_unlifted = 1 - frac_lift_38,
     ) %>%
     pivot_longer(
         cols = c(frac_unlifted, frac_unlifted_that_are_sd),
+        # cols = c(frac_no_lift, frac_unlifted_that_are_sd),
         names_to = "type",
         values_to = "value"
     ) %>%
@@ -122,6 +132,8 @@ library(stringi)
 levels <- c(paste0("chr", c(1:22, "X", "Y", "Un")), "")
 peaks_with_38_info %>%
     filter(!lifts_to_38) %>%
+    filter(Sample != "HG002") %>%
+    filter(Sample != "GM12878") %>%
     mutate(
         chrom_hg38 = gsub("_.*", "", chrom_hg38),
         chrom_hg38 = factor(chrom_hg38, levels = rev(levels)),
@@ -175,5 +187,37 @@ my_ggsave(
     "Figures/compare-to-38-HG002-peaks-not-lifting-to-38-ideogram.pdf",
     width = 6,
     height = 2
+)
+```
+
+
+
+# an idogram of HG002 of the unlifted peaks 
+```{r}
+peaks_with_38_info %>%
+    filter(Sample == "HG002") %>%
+    filter(!lifts_to_38) %>%
+    ggplot(
+        aes(
+            x = start,
+            color = haplotype_distinct,
+        )
+    ) +
+    facet_col(~chrom) +
+    geom_step(
+        alpha = 0.7,
+        binwidth = 1e6,
+    ) +
+    scale_x_continuous(
+        "HG002 position (Mb)",
+        labels = comma
+    ) +
+    ylab("") +
+    my_grid()
+
+my_ggsave(
+    "Figures/compare-to-38-HG002-unlifted-peaks-ideogram.pdf",
+    width = 6,
+    height = 20
 )
 ```
