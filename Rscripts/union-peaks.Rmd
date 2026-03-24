@@ -1,0 +1,368 @@
+```{r setup}
+source("Rscripts/utils.R")
+
+# Global thresholds for calling a site a "peak" in a given sample
+MIN_FIRE_COV <- 4
+MIN_FRAC_ACC <- 0.20
+
+# Haplotype analysis thresholds
+DIFF_THRESHOLD <- 0.25
+MIN_HAP_COV <- 10
+
+# TRUE = load test subset (2 ind_keys: 1 PacBio + 1 ONT), FALSE = full data
+USE_TEST <- FALSE
+USE_TEST <- TRUE
+
+UNION_PEAKS_FILE <- "/mmfs1/gscratch/stergachislab/HPRC/fiber-seq-pilot/HLA_graphs/peak_calling_all_chrs/All_HPRC_peaks_NewGraph_w_HG002/All_HPRC_peaks_NewGraph_w_HG002_final_tbl_w_metadata.tsv"
+TEST_FILE <- "Tables/union-peaks-test-input.tsv.gz"
+```
+
+# Build test dataset (run once, then use cached file)
+```{r build-test-data}
+if (USE_TEST && !file.exists(TEST_FILE)) {
+    cat("Building test dataset from full file...\n")
+    full_data <- fread(UNION_PEAKS_FILE)
+    full_data[, ind_key := sub("_[12]$", "", sample_id)]
+
+    # pick one PacBio, one ONT, and HG002
+    pb_key <- full_data[grepl("_PacBio_", sample_id), unique(ind_key)][1]
+    ont_key <- full_data[grepl("_ONT_", sample_id), unique(ind_key)][1]
+    hg002_keys <- full_data[grepl("^HG002_", sample_id), unique(ind_key)]
+    test_keys <- unique(c(pb_key, ont_key, hg002_keys))
+    cat("Test ind_keys:", paste(test_keys, collapse = ", "), "\n")
+
+    test_data <- full_data[ind_key %in% test_keys]
+    cat("Test rows:", nrow(test_data), "\n")
+
+    fwrite(test_data[, !"ind_key"], TEST_FILE, sep = "\t")
+    cat("Saved", TEST_FILE, "\n")
+    rm(full_data, test_data)
+    gc()
+}
+```
+
+# Load chromosome alias table and segmental duplications
+```{r load-annotations}
+# Chromosome alias: maps assembly contig names -> hg38 chromosome names
+all_chroms <- fread(
+    "/mmfs1/gscratch/stergachislab/HPRC/assemblies/allChromAlias.txt",
+    header = FALSE, col.names = c("chrom", "chrom_hg38", "chrom_ncbi")
+)
+
+# Segmental duplications (union of assembly + T2T SDs)
+SDs <- bind_rows(
+    my_read_bed("/mmfs1/gscratch/stergachislab/HPRC/annotations/segdups/all-segdups-merged.bed.gz"),
+    my_read_bed("/mmfs1/gscratch/stergachislab/HPRC/annotations/segdups/T2Tv2.0.SDs.bed.gz"),
+)
+```
+
+# Load union peaks
+```{r load-data}
+input_file <- ifelse(USE_TEST, TEST_FILE, UNION_PEAKS_FILE)
+cat("Loading:", input_file, "\n")
+
+raw_df <- fread(input_file) %>%
+    # convert empty strings to NA for assembly/hg38 columns
+    mutate(across(where(is.character), ~ {
+        .x[.x == "" | .x == "NA_NA_NA"] <- NA_character_
+        .x
+    })) %>%
+    mutate(score = na_if(score, -2)) %>%
+    mutate(across(c(cons_start, cons_end, asm_start, asm_end, hg38_start, hg38_end), as.integer)) %>%
+    mutate(
+        is_peak = coalesce(fire_coverage >= MIN_FIRE_COV & fire_cov_OV_cov >= MIN_FRAC_ACC, FALSE),
+    ) %>%
+    data.table()
+
+# Filter consensus peaks: keep only those that are a peak in at least one sample
+passing_peaks <- raw_df[is_peak == TRUE, unique(consensus_peak_id)]
+cat(
+    "Total consensus peaks:", uniqueN(raw_df$consensus_peak_id), "\n",
+    "Passing in >= 1 sample:", length(passing_peaks), "\n",
+    "Filtered out:", uniqueN(raw_df$consensus_peak_id) - length(passing_peaks), "\n"
+)
+raw_df <- raw_df[consensus_peak_id %in% passing_peaks]
+```
+
+# Annotate: sample ID parsing, SD overlap, chromosome placement
+```{r annotate}
+union_df <- raw_df %>%
+    mutate(
+        # parse sample_id: handles both "ID_PS_Platform_ID_Hap" and "ID_ID_Hap"
+        Individual_ID = sub("_.*", "", sample_id),
+        Haplotype = sub(".*_", "", sample_id),
+        Platform = case_when(
+            grepl("_PacBio_", sample_id) ~ "PacBio",
+            grepl("_ONT_", sample_id) ~ "ONT",
+            TRUE ~ NA_character_
+        ),
+        PS = ifelse(
+            str_count(sample_id, "_") >= 4,
+            sub("^[^_]+_([^_]+)_.*", "\\1", sample_id),
+            NA_character_
+        ),
+        ind_key = sub("_[12]$", "", sample_id),
+    ) %>%
+    # SD overlap via consensus coords
+    rename(chrom = cons_chr, start = cons_start, end = cons_end) %>%
+    bed_map(SDs, is_SD_cons = n() > 0) %>%
+    rename(cons_chr = chrom, cons_start = start, cons_end = end) %>%
+    # SD overlap via assembly coords
+    rename(chrom = asm_chr, start = asm_start, end = asm_end) %>%
+    bed_map(SDs, is_SD_asm = n() > 0) %>%
+    rename(asm_chr = chrom, asm_start = start, asm_end = end) %>%
+    replace_na(list(is_SD_cons = FALSE, is_SD_asm = FALSE)) %>%
+    mutate(is_SD = is_SD_cons | is_SD_asm) %>%
+    # join asm_chr to chromosome alias table for hg38 placement
+    left_join(
+        all_chroms[, .(chrom, chrom_hg38)],
+        by = c("asm_chr" = "chrom")
+    ) %>%
+    mutate(
+        autosome = case_when(
+            grepl("chrX|chrY", asm_chr) | grepl("chrX|chrY", chrom_hg38) ~ "Sex chromosome",
+            TRUE ~ "Autosomes"
+        ),
+    ) %>%
+    data.table()
+
+glimpse(union_df)
+```
+
+# QC: summary stats
+```{r summary-stats}
+cat("Samples:", uniqueN(union_df$sample_id), "\n")
+cat("Individuals:", uniqueN(union_df$Individual_ID), "\n")
+cat("Consensus peaks:", uniqueN(union_df$consensus_peak_id), "\n")
+
+union_df %>%
+    group_by(Platform) %>%
+    summarise(
+        n_samples = n_distinct(sample_id),
+        n_individuals = n_distinct(Individual_ID),
+    )
+```
+
+# QC: peaks per sample
+```{r qc-peaks-per-sample}
+union_df %>%
+    group_by(sample_id) %>%
+    summarise(n_peaks = sum(is_peak))
+```
+
+# ============================================================
+# Haplotype analysis: pivot wide, classify, merge back
+# ============================================================
+
+# Pivot to wide via self-join (avoids dcast NA coercion issues)
+```{r hap-pivot-wide}
+merge_cols <- c("ind_key", "consensus_peak_id")
+keep_cols <- c(
+    "Individual_ID", "PS", "Platform",
+    "cons_chr", "cons_start", "cons_end"
+)
+val_cols <- c(
+    "coverage", "fire_coverage", "fire_cov_OV_cov",
+    "is_peak", "asm_chr", "chrom_hg38", "is_SD", "autosome"
+)
+
+h1 <- union_df[Haplotype == "1", c(merge_cols, keep_cols, val_cols), with = FALSE]
+h2 <- union_df[Haplotype == "2", c(merge_cols, val_cols), with = FALSE]
+setnames(h1, val_cols, paste0(val_cols, "_1"))
+setnames(h2, val_cols, paste0(val_cols, "_2"))
+
+hap_wide <- merge(h1, h2, by = merge_cols, all = TRUE)
+
+# derive combined and haplotype metrics
+hap_wide[, `:=`(
+    is_SD = fcoalesce(is_SD_1, FALSE) | fcoalesce(is_SD_2, FALSE),
+    autosome = fifelse(
+        autosome_1 %in% "Sex chromosome" | autosome_2 %in% "Sex chromosome",
+        "Sex chromosome", "Autosomes"
+    ),
+    diff = fire_cov_OV_cov_1 - fire_cov_OV_cov_2,
+    pass_hap_coverage = coverage_1 >= MIN_HAP_COV & coverage_2 >= MIN_HAP_COV,
+    peak_status = fcase(
+        is_peak_1 & is_peak_2, "both",
+        is_peak_1 & !is_peak_2, "H1_only",
+        !is_peak_1 & is_peak_2, "H2_only",
+        default = "neither"
+    )
+)]
+
+# keep only peaks where at least one haplotype is a peak
+hap_wide <- hap_wide[peak_status != "neither"]
+cat("Rows in hap_wide:", nrow(hap_wide), "\n")
+
+# classify haplotype status
+hap_wide[, haplotype_distinct := fcase(
+    # genetically haplotype-specific: peak on one hap, no assembly on other
+    peak_status == "H1_only" & is.na(asm_chr_2),
+    "Genetically haplotype-specific",
+    peak_status == "H2_only" & is.na(asm_chr_1),
+    "Genetically haplotype-specific",
+    # insufficient coverage to test haplotype selectivity
+    !pass_hap_coverage,
+    "Untestable",
+    # epigenetically selective: large diff with sufficient coverage
+    abs(diff) >= DIFF_THRESHOLD,
+    "Epigenetically haplotype-selective",
+    # shared: small diff with sufficient coverage
+    default = "Shared"
+)]
+
+hap_wide[, .N, by = haplotype_distinct]
+```
+
+# Merge haplotype classification back to long format
+```{r hap-merge-back}
+hap_class <- hap_wide[, .(ind_key, consensus_peak_id, haplotype_distinct, diff)]
+
+union_hap_df <- merge(
+    union_df, hap_class,
+    by = c("ind_key", "consensus_peak_id"),
+    all.x = TRUE
+)
+cat("Rows with haplotype class:", sum(!is.na(union_hap_df$haplotype_distinct)), "\n")
+```
+
+# Save tables: three coordinate versions + hap_wide
+```{r save-tables}
+bgz_write <- function(dt, path) {
+    # rename first col to #chrom for BED convention
+    names(dt)[1] <- paste0("#", names(dt)[1])
+    tmp <- sub("\\.gz$", "", path)
+    fwrite(dt, tmp, sep = "\t", quote = FALSE)
+    system(paste("bgzip -@ 4 -f", shQuote(tmp)))
+    cat("Saved", path, "\n")
+}
+
+# consensus coords (all rows)
+cons_df <- union_hap_df %>%
+    rename(chrom = cons_chr, start = cons_start, end = cons_end) %>%
+    select(chrom, start, end, everything()) %>%
+    arrange(chrom, start, end)
+bgz_write(cons_df, "Tables/union-peaks-cons.bed.gz")
+
+# CHM13 coords (cons_chr with bare chr* names = CHM13)
+chm13_df <- union_hap_df %>%
+    rename(chrom = cons_chr, start = cons_start, end = cons_end) %>%
+    filter(grepl("^chr[0-9XY]+$", chrom)) %>%
+    select(chrom, start, end, everything()) %>%
+    arrange(chrom, start, end)
+bgz_write(chm13_df, "Tables/union-peaks-chm13.bed.gz")
+
+# assembly coords
+asm_df <- union_hap_df %>%
+    rename(chrom = asm_chr, start = asm_start, end = asm_end) %>%
+    filter(!is.na(chrom)) %>%
+    select(chrom, start, end, everything()) %>%
+    arrange(chrom, start, end)
+bgz_write(asm_df, "Tables/union-peaks-asm.bed.gz")
+
+# hg38 coords
+hg38_df <- union_hap_df %>%
+    rename(chrom = hg38_chr, start = hg38_start, end = hg38_end) %>%
+    filter(!is.na(chrom)) %>%
+    select(chrom, start, end, everything()) %>%
+    arrange(chrom, start, end)
+bgz_write(hg38_df, "Tables/union-peaks-hg38.bed.gz")
+
+# Filtered versions: only rows with asm_peak_id (assembly-level peak calls)
+bgz_write(
+    cons_df %>% filter(!is.na(asm_peak_id)),
+    "Tables/union-peaks-cons-with-asm-peak.bed.gz"
+)
+bgz_write(
+    chm13_df %>% filter(!is.na(asm_peak_id)),
+    "Tables/union-peaks-chm13-with-asm-peak.bed.gz"
+)
+bgz_write(
+    asm_df %>% filter(!is.na(asm_peak_id)),
+    "Tables/union-peaks-asm-with-asm-peak.bed.gz"
+)
+bgz_write(
+    hg38_df %>% filter(!is.na(asm_peak_id)),
+    "Tables/union-peaks-hg38-with-asm-peak.bed.gz"
+)
+
+# Write README describing outputs and columns
+readme <- glue('
+# Union Peaks Tables
+
+## Thresholds used
+- MIN_FIRE_COV: {MIN_FIRE_COV} (minimum FIRE coverage to call a peak)
+- MIN_FRAC_ACC: {MIN_FRAC_ACC} (minimum fraction accessibility to call a peak)
+- DIFF_THRESHOLD: {DIFF_THRESHOLD} (minimum H1-H2 accessibility difference for haplotype-selective)
+- MIN_HAP_COV: {MIN_HAP_COV} (minimum coverage on both haplotypes to test selectivity)
+
+## Output files
+All files are bgzipped BED files with a `#chrom` header line.
+Each file contains the same columns but with different leading coordinates
+(renamed to chrom/start/end), filtered to rows where those coordinates exist.
+
+- `union-peaks-cons.bed.gz`: All rows, leading coords are consensus (graph) coordinates
+- `union-peaks-chm13.bed.gz`: Subset where consensus coords are bare chr* names (T2T-CHM13 reference paths)
+- `union-peaks-asm.bed.gz`: Rows with assembly coordinates (not NA)
+- `union-peaks-hg38.bed.gz`: Rows with hg38 liftover coordinates (not NA)
+
+## Columns (in output order)
+
+| # | Column | Description |
+|---|--------|-------------|
+| 1 | chrom | Leading coordinate chromosome (renamed from cons_chr, asm_chr, or hg38_chr depending on file) |
+| 2 | start | Leading coordinate start |
+| 3 | end | Leading coordinate end |
+| 4 | ind_key | Individual+platform key (sample_id without haplotype suffix) |
+| 5 | consensus_peak_id | Unique ID for the consensus peak in the graph |
+| 6 | sample_id | Full sample identifier (e.g. HG00438_PS00991_ONT_HG00438_1) |
+| 7 | coverage | Total fiber-seq coverage at this site in this sample |
+| 8 | fire_coverage | Number of fibers showing accessible chromatin (FIRE) |
+| 9 | score | Peak score from the caller |
+| 10 | fire_cov_OV_cov | Fraction of fibers that are accessible (fire_coverage / coverage) |
+| 11 | asm | Assembly identifier |
+| 12 | asm_chr | Assembly contig name (NA if no assembly mapping) |
+| 13 | asm_start | Assembly start coordinate |
+| 14 | asm_end | Assembly end coordinate |
+| 15 | asm_peak_id | Peak ID in assembly coordinates |
+| 16 | hg38_chr | hg38 chromosome (NA if no liftover) |
+| 17 | hg38_start | hg38 start coordinate |
+| 18 | hg38_end | hg38 end coordinate |
+| 19 | exists_in_hg38 | Whether the peak has hg38 coordinates (logical) |
+| 20 | overlaps_original_called_peak | Whether this site overlaps a peak from the original per-sample analysis (logical) |
+| 21 | sample_id_peak_id_TEMP_COL | Temporary join column from peak calling pipeline |
+| 22 | num_overlapping_orig_peaks | Number of original per-sample peaks overlapping this consensus peak |
+| 23 | orig_peaks_overlapping_consensus | IDs of original peaks overlapping this consensus peak |
+| 24 | seq | DNA sequence at the peak |
+| 25 | is_peak | Whether this site passes peak thresholds (fire_coverage >= {MIN_FIRE_COV} AND fire_cov_OV_cov >= {MIN_FRAC_ACC}) |
+| 26 | Individual_ID | Individual identifier (e.g. HG00438), parsed from sample_id |
+| 27 | Haplotype | Haplotype number (1 or 2), parsed from sample_id |
+| 28 | Platform | Sequencing platform (PacBio, ONT, or NA for HG002) |
+| 29 | PS | Sample preparation identifier, parsed from sample_id (NA for HG002) |
+| 30 | is_SD_cons | Whether the consensus coordinates overlap a segmental duplication |
+| 31 | is_SD_asm | Whether the assembly coordinates overlap a segmental duplication |
+| 32 | is_SD | Whether either coordinate set overlaps a segmental duplication |
+| 33 | chrom_hg38 | hg38 chromosome name for the assembly contig (from chromosome alias table) |
+| 34 | autosome | "Autosomes" or "Sex chromosome", based on chrom_hg38/asm_chr |
+| 35 | haplotype_distinct | Haplotype classification (see below) |
+| 36 | diff | Accessibility difference between haplotypes (fire_cov_OV_cov H1 - H2) |
+
+### haplotype_distinct categories
+- **Genetically haplotype-specific**: Peak on one haplotype, no assembly mapping on the other
+- **Epigenetically haplotype-selective**: Sufficient coverage (>= {MIN_HAP_COV}) and |diff| >= {DIFF_THRESHOLD}
+- **Shared**: Sufficient coverage and |diff| < {DIFF_THRESHOLD}
+- **Untestable**: Insufficient coverage on one or both haplotypes to determine
+- **NA**: Peak not called on either haplotype for this individual
+')
+
+writeLines(readme, "Tables/union-peaks-README.md")
+cat("Saved Tables/union-peaks-README.md\n")
+```
+
+
+```{r}
+nrow(cons_df)
+nrow(cons_df[!is.na(asm_peak_id)])
+glimpse(cons_df)
+```
+

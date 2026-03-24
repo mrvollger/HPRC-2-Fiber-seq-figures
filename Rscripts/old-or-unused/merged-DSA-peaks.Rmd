@@ -40,12 +40,10 @@ all_manifest <- t_all_manifest %>%
     filter(has_peaks_to_hg38) %>%
     data.table()
 
-f <- all_manifest$dsg_fire_peaks[2]
-all_manifest$dsg_fire_peaks
-
 all_SDs <- my_read_bed("/mmfs1/gscratch/stergachislab/HPRC/annotations/segdups/all-segdups-merged.bed.gz")
 
 all_chroms <- fread("/mmfs1/gscratch/stergachislab/HPRC/assemblies/allChromAlias.txt", header = F)
+
 colnames(all_chroms) <- c("chrom", "chrom_hg38", "chrom_ncbi")
 all_chroms
 ````
@@ -56,7 +54,6 @@ MIN_FRAC_ACC <- 0.15
 
 read_merged_fire_peaks <- function(f, ID) {
     k <- my_read_bed(f) %>%
-        # head(100) %>%
         # add in the chrom_hg38 names
         left_join(all_chroms, by = c("chrom")) %>%
         mutate(
