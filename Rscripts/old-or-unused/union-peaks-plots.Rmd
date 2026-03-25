@@ -1,0 +1,512 @@
+```{r setup}
+source("Rscripts/utils.R")
+
+# Haplotype category colors
+shared_color <- "#888888"
+hap_distinct_color <- "#8b0000"
+
+hdca_colors <- c(
+    "Shared" = shared_color,
+    "Haplotype-distinct" = hap_distinct_color,
+    "Epigenetically haplotype-selective" = "purple",
+    "Genetically haplotype-specific" = "#f0a500"
+)
+name_order <- rev(names(hdca_colors))
+```
+
+# Load tables (produced by union-peaks.Rmd)
+```{r load-tables}
+union_df <- fread("Tables/union-peaks.tsv.gz")
+union_df[, haplotype_distinct := factor(haplotype_distinct, levels = name_order)]
+
+hap_wide <- fread("Tables/union-peaks-hap-wide.tsv.gz")
+hap_wide[, haplotype_distinct := factor(haplotype_distinct, levels = name_order)]
+```
+
+# Peaks per sample
+```{r peaks-per-sample}
+union_df %>%
+    group_by(Individual_ID, PS, Platform, Haplotype, sample_id) %>%
+    summarise(n_peaks = sum(is_peak)) %>%
+    filter(!is.na(Platform)) %>%
+    ggplot(aes(x = "", y = n_peaks, color = Platform)) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color = "black", fill = NA) +
+    scale_y_continuous("# of peaks per sample", labels = comma) +
+    xlab("") +
+    my_grid() +
+    scale_color_manual(values = PLAT_COLORS) +
+    theme(legend.position = "top")
+
+my_ggsave("Figures/union-peaks-per-sample.pdf", width = 3, height = 3)
+```
+
+# Peak sharing across samples
+```{r peak-sharing}
+peak_sharing <- union_df[,
+    .(
+        n_samples_peak = sum(is_peak),
+        n_samples_total = .N,
+        exists_in_hg38 = exists_in_hg38[1]
+    ),
+    by = consensus_peak_id
+]
+
+peak_sharing %>%
+    ggplot(aes(x = n_samples_peak)) +
+    geom_histogram(binwidth = 1, fill = "steelblue", color = "black", linewidth = 0.2) +
+    scale_x_continuous("# samples where site is a peak",
+        breaks = scales::breaks_width(1)
+    ) +
+    scale_y_continuous("# consensus peaks", labels = comma) +
+    my_grid()
+
+my_ggsave("Figures/union-peak-sharing-histogram.pdf", width = 5, height = 3)
+```
+
+# Peak sharing stratified by hg38 liftover
+```{r peak-sharing-hg38}
+peak_sharing %>%
+    ggplot(aes(x = n_samples_peak, fill = exists_in_hg38)) +
+    geom_histogram(binwidth = 1, position = "dodge", color = "black", linewidth = 0.2) +
+    scale_x_continuous("# samples where site is a peak",
+        breaks = scales::breaks_width(1)
+    ) +
+    scale_y_continuous("# consensus peaks", labels = comma) +
+    scale_fill_brewer("Exists in hg38", palette = "Set1") +
+    my_grid() +
+    theme(legend.position = "top")
+
+my_ggsave("Figures/union-peak-sharing-by-hg38.pdf", width = 5, height = 3)
+```
+
+# Accessibility distribution
+```{r accessibility-distribution}
+set.seed(42)
+plot_sample <- union_df[sample(.N, min(.N, 1e6))]
+
+plot_sample %>%
+    ggplot(aes(x = fire_cov_OV_cov, fill = is_peak)) +
+    geom_histogram(binwidth = 0.02, position = "identity", alpha = 0.6) +
+    geom_vline(xintercept = 0.20, linetype = "dashed", color = "red") +
+    scale_x_continuous("FIRE coverage / total coverage", limits = c(0, 1)) +
+    scale_y_continuous("# sites (sampled)", labels = comma) +
+    scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "gray70")) +
+    my_grid() +
+    theme(legend.position = "top")
+
+my_ggsave("Figures/union-accessibility-distribution.pdf", width = 5, height = 3)
+```
+
+# Accessibility by platform
+```{r accessibility-by-platform}
+plot_sample %>%
+    filter(is_peak, !is.na(Platform)) %>%
+    ggplot(aes(x = fire_cov_OV_cov, fill = Platform)) +
+    geom_density(alpha = 0.5) +
+    geom_vline(xintercept = 0.20, linetype = "dashed", color = "red") +
+    scale_x_continuous("FIRE coverage / total coverage", limits = c(0, 1)) +
+    scale_fill_manual(values = PLAT_COLORS) +
+    my_grid() +
+    theme(legend.position = "top")
+
+my_ggsave("Figures/union-accessibility-by-platform.pdf", width = 5, height = 3)
+```
+
+# Original peak recovery
+```{r original-peak-recovery}
+orig_recovery <- union_df[is_peak == TRUE & !is.na(Platform),
+    .(
+        n_peaks = .N,
+        n_overlap_orig = sum(overlaps_original_called_peak == TRUE),
+        frac_overlap_orig = mean(overlaps_original_called_peak == TRUE)
+    ),
+    by = .(Individual_ID, Platform, Haplotype, sample_id)
+]
+
+orig_recovery %>%
+    ggplot(aes(x = "", y = frac_overlap_orig * 100, color = Platform)) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color = "black", fill = NA) +
+    scale_y_continuous("% peaks overlapping original call") +
+    xlab("") +
+    my_grid() +
+    scale_color_manual(values = PLAT_COLORS) +
+    theme(legend.position = "top")
+
+my_ggsave("Figures/union-original-peak-recovery.pdf", width = 3, height = 3)
+```
+
+# hg38 liftover rate
+```{r hg38-liftover}
+hg38_rate <- union_df[is_peak == TRUE & !is.na(Platform),
+    .(
+        n_peaks = .N,
+        n_in_hg38 = sum(exists_in_hg38 == TRUE),
+        frac_hg38 = mean(exists_in_hg38 == TRUE)
+    ),
+    by = .(Individual_ID, Platform, Haplotype, sample_id)
+]
+
+hg38_rate %>%
+    ggplot(aes(x = "", y = frac_hg38 * 100, color = Platform)) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color = "black", fill = NA) +
+    scale_y_continuous("% peaks with hg38 coordinates") +
+    xlab("") +
+    my_grid() +
+    scale_color_manual(values = PLAT_COLORS) +
+    theme(legend.position = "top")
+
+my_ggsave("Figures/union-hg38-liftover-rate.pdf", width = 3, height = 3)
+```
+
+# Peak sharing categories per sample
+```{r peak-sharing-per-sample-view}
+sharing_info <- peak_sharing[, .(consensus_peak_id, n_samples_peak)]
+
+sample_sharing <- merge(
+    union_df[is_peak == TRUE & !is.na(Platform),
+             .(sample_id, consensus_peak_id, Platform)],
+    sharing_info,
+    by = "consensus_peak_id"
+)
+
+sample_sharing[, sharing_cat := fcase(
+    n_samples_peak == 1, "Private (1)",
+    n_samples_peak <= 5, "Rare (2-5)",
+    n_samples_peak <= 20, "Low (6-20)",
+    n_samples_peak <= 45, "Medium (21-45)",
+    default = "High (46+)"
+)]
+sample_sharing[, sharing_cat := factor(sharing_cat,
+    levels = c("Private (1)", "Rare (2-5)", "Low (6-20)",
+               "Medium (21-45)", "High (46+)")
+)]
+
+sample_sharing[, .(n_peaks = .N), by = .(sample_id, Platform, sharing_cat)] %>%
+    ggplot(aes(x = sharing_cat, y = n_peaks, color = Platform)) +
+    geom_quasirandom(method = "pseudorandom", dodge.width = 0.8, size = 0.8) +
+    scale_y_continuous("# peaks per sample", labels = comma) +
+    xlab("Peak sharing category") +
+    my_grid() +
+    scale_color_manual(values = PLAT_COLORS) +
+    theme(
+        legend.position = "top",
+        axis.text.x = element_text(angle = 30, hjust = 1),
+    )
+
+my_ggsave("Figures/union-peak-sharing-categories.pdf", width = 5, height = 3.5)
+```
+
+# ============================================================
+# Haplotype analysis plots
+# ============================================================
+
+# Per-sample counts summary
+```{r per-sample-summary}
+per_sample_summary <- union_df[is_peak == TRUE, .(
+    n = .N,
+    n_autosome = sum(autosome == "Autosomes"),
+    n_sex = sum(autosome == "Sex chromosome"),
+    n_sd = sum(is_SD),
+    percent_sd = 100 * sum(is_SD) / .N,
+    mean_coverage = mean(coverage)
+), by = .(Individual_ID, ind_key, Platform)]
+per_sample_summary
+```
+
+# H1 vs H2 fire coverage scatter (HG002)
+```{r hcsa-scatter}
+hap_wide[Individual_ID == "HG002" & autosome == "Autosomes" &
+         peak_status == "both"] %>%
+    ggplot(aes(x = fire_coverage_1, y = fire_coverage_2)) +
+    geom_hex(bins = 50) +
+    scale_fill_distiller("", palette = "Spectral", trans = "log10") +
+    scale_x_continuous("H1 FIRE coverage") +
+    scale_y_continuous("H2 FIRE coverage") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    facet_col(~ind_key, scales = "free") +
+    my_grid()
+my_ggsave("Figures/union-hcsa-scatter.pdf", width = 4, height = 3)
+```
+
+# Category summary and bar plot (HG002)
+```{r hap-distinct-bar}
+hap_summary <- hap_wide[, .(n = .N),
+    by = .(Individual_ID, ind_key, Platform, autosome, haplotype_distinct)
+][, `:=`(
+    total_n = sum(n),
+    frac = n / sum(n)
+), by = ind_key]
+
+hap_summary[Individual_ID == "HG002" & autosome == "Autosomes" &
+            haplotype_distinct != "Shared"] %>%
+    ggplot(aes(y = haplotype_distinct, fill = haplotype_distinct, x = n)) +
+    geom_bar(stat = "identity") +
+    geom_text(
+        data = . %>%
+            group_by(ind_key, haplotype_distinct) %>%
+            summarise(
+                n = sum(n), frac = sum(frac),
+                label = paste0(comma(n), " (", round(100 * frac, 1), "%)")
+            ) %>%
+            ungroup(),
+        aes(x = 0, label = label, fill = NULL),
+        hjust = -0.1, color = "black", size = 2
+    ) +
+    scale_fill_manual(values = hdca_colors) +
+    scale_x_continuous("# of regulatory elements", label = comma) +
+    ylab("") +
+    facet_col(~ind_key) +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/union-haplotype-distinct-bar.pdf", width = 3, height = 1.5)
+```
+
+# Pie chart: shared vs haplotype-distinct (HG002)
+```{r hap-distinct-pie}
+hap_summary[Individual_ID == "HG002" & autosome == "Autosomes"] %>%
+    mutate(hap_cat = ifelse(
+        haplotype_distinct == "Shared", "Shared", "Haplotype-distinct"
+    )) %>%
+    group_by(hap_cat, ind_key) %>%
+    summarise(n = sum(n)) %>%
+    ungroup() %>%
+    mutate(
+        percent = 100 * n / sum(n),
+        label = paste0("n=", comma(n), "\n", round(percent, 1), "%"),
+    ) %>%
+    ggplot(aes(x = "", y = n, fill = hap_cat)) +
+    geom_col() +
+    coord_polar(theta = "y", start = pi / 2) +
+    geom_text(
+        aes(label = label),
+        position = position_stack(vjust = 0.5),
+        size = 1.5, color = "white"
+    ) +
+    scale_fill_manual("", values = hdca_colors) +
+    guides(fill = guide_legend(ncol = 1)) +
+    facet_col(~ind_key) +
+    theme_void(base_size = 6) +
+    theme(legend.position = "top", legend.key.size = unit(0.2, "cm"))
+my_ggsave("Figures/union-haplotype-distinct-pie.pdf", width = 1.5, height = 1.5)
+```
+
+# Beeswarm: % haplotype-distinct across samples
+```{r hap-distinct-beeswarm}
+hap_summary[autosome == "Autosomes" & haplotype_distinct != "Shared",
+    .(pct_hap_distinct = sum(frac)),
+    by = ind_key
+] %>%
+    ggplot(aes(x = "", y = pct_hap_distinct)) +
+    geom_violin(fill = "grey", color = NA, alpha = 0.5,
+        adjust = 1.5, scale = "width", width = 0.3) +
+    geom_quasirandom(
+        width = 0.1, alpha = 0.5, size = 1,
+        color = hap_distinct_color
+    ) +
+    scale_y_continuous("REs that are haplotype-distinct",
+        limits = c(0, NA),
+        labels = percent_format(accuracy = 1)) +
+    xlab("HPRC Fiber-seq pilot samples") +
+    my_grid()
+my_ggsave("Figures/union-haplotype-distinct-beeswarm.pdf",
+    width = 1.5, height = 2)
+```
+
+# % haplotype-distinct vs mean coverage
+```{r hap-distinct-vs-coverage}
+hap_distinct_frac <- hap_summary[autosome == "Autosomes",
+    .(frac_hap_distinct = sum(frac[haplotype_distinct != "Shared"])),
+    by = .(Individual_ID, ind_key, Platform)
+]
+coverage_info <- per_sample_summary[, .(ind_key, mean_coverage)]
+hap_vs_cov <- merge(hap_distinct_frac, coverage_info, by = "ind_key")
+
+hap_vs_cov %>%
+    ggplot(aes(x = mean_coverage, y = frac_hap_distinct)) +
+    stat_cor(method = "pearson", size = 2) +
+    geom_point(size = 2, color = hap_distinct_color, alpha = 0.7) +
+    scale_x_continuous("Mean coverage") +
+    scale_y_continuous("REs that are haplotype-distinct", labels = percent) +
+    my_grid()
+my_ggsave("Figures/union-hap-distinct-vs-coverage.pdf", width = 2, height = 2)
+```
+
+# Total REs per sample
+```{r total-res-per-sample}
+hap_summary[autosome == "Autosomes",
+    .(n = sum(n)),
+    by = .(ind_key, Platform)
+] %>%
+    ggplot(aes(x = "", y = n)) +
+    geom_violin(fill = "grey", color = NA, alpha = 0.5,
+        adjust = 1.5, scale = "width", width = 0.3) +
+    geom_quasirandom(width = 0.1, alpha = 0.5, size = 1) +
+    scale_y_continuous("# of regulatory elements",
+        limits = c(0, NA), labels = comma) +
+    xlab("HPRC Fiber-seq pilot samples") +
+    my_grid()
+my_ggsave("Figures/union-total-res-per-sample.pdf", width = 1.6, height = 2)
+```
+
+# SD overlap analysis
+```{r sd-analysis}
+sd_df <- hap_wide[, .(
+    n_total = .N,
+    n_sd = sum(is_SD),
+    frac_sd = sum(is_SD) / .N,
+    total_hap_distinct = sum(haplotype_distinct != "Shared", na.rm = TRUE),
+    n_sd_and_hap_distinct = sum(is_SD & haplotype_distinct != "Shared", na.rm = TRUE),
+    frac_sd_and_hap_distinct = sum(is_SD & haplotype_distinct != "Shared", na.rm = TRUE) /
+        max(sum(is_SD), 1),
+    n_sd_and_genetic = sum(is_SD & haplotype_distinct == "Genetically haplotype-specific", na.rm = TRUE),
+    frac_sd_and_genetic = sum(is_SD & haplotype_distinct == "Genetically haplotype-specific", na.rm = TRUE) /
+        max(sum(is_SD), 1),
+    n_sd_and_epigenetic = sum(is_SD & haplotype_distinct == "Epigenetically haplotype-selective", na.rm = TRUE),
+    frac_sd_and_epigenetic = sum(is_SD & haplotype_distinct == "Epigenetically haplotype-selective", na.rm = TRUE) /
+        max(sum(is_SD), 1)
+), by = .(Individual_ID, ind_key)]
+sd_df
+```
+
+# SD fraction beeswarm
+```{r sd-frac-beeswarm}
+sd_df %>%
+    ggplot(aes(x = "", y = frac_sd)) +
+    geom_violin(fill = "grey", color = NA, alpha = 0.5,
+        adjust = 1.5, scale = "width", width = 0.3) +
+    geom_quasirandom(color = "darkred",
+        width = 0.1, alpha = 0.5, size = 1) +
+    scale_y_continuous("REs that intersect SDs",
+        limits = c(0, NA), labels = percent) +
+    xlab("HPRC Fiber-seq pilot samples") +
+    my_grid()
+my_ggsave("Figures/union-sd-frac.pdf", width = 1.5, height = 2)
+```
+
+# SD REs by haplotype-distinct subcategory
+```{r sd-hap-distinct-subcategory}
+sd_names <- c(
+    "Genetically haplotype-specific" = "frac_sd_and_genetic",
+    "Epigenetically haplotype-selective" = "frac_sd_and_epigenetic",
+    "Haplotype-distinct" = "frac_sd_and_hap_distinct"
+)
+sd_names_flip <- setNames(names(sd_names), sd_names)
+
+sd_df %>%
+    pivot_longer(
+        cols = c(frac_sd_and_genetic, frac_sd_and_hap_distinct,
+                 frac_sd_and_epigenetic),
+        names_to = "type", values_to = "value"
+    ) %>%
+    mutate(
+        type = sd_names_flip[type],
+        type = factor(type, levels = rev(names(sd_names)))
+    ) %>%
+    ggplot(aes(x = value, y = type, color = type)) +
+    geom_violin(fill = "grey", color = NA, alpha = 0.5,
+        adjust = 1.5, scale = "width", width = 0.5) +
+    geom_quasirandom(width = 0.25, alpha = 0.5, size = 1) +
+    geom_text_repel(
+        data = . %>%
+            group_by(type) %>%
+            summarise(median_frac = median(value, na.rm = TRUE)) %>%
+            mutate(label = paste0(round(100 * median_frac, 1), "%")),
+        aes(x = median_frac, label = label),
+        min.segment.length = 0, nudge_y = 0.5,
+        color = "black", size = 2
+    ) +
+    scale_y_discrete("") +
+    scale_x_continuous("% of SD REs that are haplotype-distinct",
+        limits = c(0, NA), labels = percent) +
+    scale_color_manual(values = hdca_colors) +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/union-sd-hap-distinct-frac.pdf", width = 3, height = 1.5)
+```
+
+# Density of H1-H2 diff by SD status
+```{r diff-density-by-sd}
+hap_wide[autosome == "Autosomes" & peak_status == "both" &
+         pass_hap_coverage] %>%
+    ggplot(aes(x = diff, fill = is_SD)) +
+    geom_density(alpha = 0.5, adjust = 1) +
+    scale_x_continuous("Difference in accessibility between haplotypes") +
+    scale_y_continuous("Density") +
+    scale_fill_manual("Intersects SD",
+        values = c("TRUE" = "darkred", "FALSE" = "black")) +
+    my_grid()
+my_ggsave("Figures/union-diff-density-by-sd.pdf", width = 3, height = 2)
+```
+
+# ECDF of accessibility by SD status
+```{r ecdf-by-sd}
+set.seed(42)
+hap_wide[, .SD[sample(.N, min(.N, 50000))], by = is_SD] %>%
+    mutate(acc = (fire_coverage_1 + fire_coverage_2) /
+                 (coverage_1 + coverage_2)) %>%
+    ggplot(aes(x = acc, color = is_SD)) +
+    stat_ecdf(linewidth = 0.75, alpha = 0.75) +
+    scale_x_continuous("% actuation of regulatory elements",
+        labels = percent) +
+    scale_y_continuous("Cumulative % of regulatory elements",
+        labels = percent) +
+    scale_color_manual("Intersects SD",
+        values = c("TRUE" = "darkred", "FALSE" = "black")) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-ecdf-by-sd.pdf", width = 2, height = 2)
+```
+
+# Density of accessibility by SD status
+```{r accessibility-density-by-sd}
+set.seed(42)
+hap_wide[, .SD[sample(.N, min(.N, 50000))], by = is_SD] %>%
+    mutate(acc = (fire_coverage_1 + fire_coverage_2) /
+                 (coverage_1 + coverage_2)) %>%
+    ggplot(aes(x = acc, fill = is_SD)) +
+    geom_density(alpha = 0.5, adjust = 0.5) +
+    scale_x_continuous("% actuation of regulatory elements",
+        labels = percent) +
+    scale_y_continuous("Density") +
+    scale_fill_manual("Intersects SD",
+        values = c("TRUE" = "darkred", "FALSE" = "black")) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-accessibility-density-by-sd.pdf",
+    width = 2, height = 2)
+```
+
+# Size distribution by SD status
+```{r size-by-sd}
+set.seed(42)
+hap_wide[peak_status == "both",
+    .SD[sample(.N, min(.N, 50000))], by = is_SD
+] %>%
+    ggplot(aes(x = cons_end - cons_start, fill = is_SD)) +
+    geom_density(alpha = 0.5, adjust = 0.5) +
+    scale_x_continuous("Size of regulatory elements (bp)",
+        labels = comma, trans = "log10", limits = c(100, 1000)) +
+    annotation_logticks(sides = "b") +
+    scale_y_continuous("Density") +
+    scale_fill_manual("Intersects SD",
+        values = c("TRUE" = "darkred", "FALSE" = "black")) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-size-by-sd.pdf", width = 2, height = 2)
+```
+
+# Fraction of haplotype-distinct REs in SDs
+```{r hap-distinct-in-sds}
+sd_df %>%
+    ggplot(aes(y = Individual_ID,
+               x = n_sd_and_hap_distinct / total_hap_distinct)) +
+    geom_bar(stat = "identity", fill = "darkred", alpha = 0.7) +
+    scale_x_continuous("Fraction of haplotype-distinct REs in SDs",
+        limits = c(0, 1), labels = percent) +
+    my_grid()
+my_ggsave("Figures/union-frac-hap-distinct-in-sds.pdf",
+    width = 3, height = 2)
+```
