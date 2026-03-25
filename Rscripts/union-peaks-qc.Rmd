@@ -1,0 +1,411 @@
+```{r setup}
+source("Rscripts/utils.R")
+# Column definitions: see Tables/union-peaks-README.md
+```
+
+# Load tables (produced by union-peaks.Rmd)
+```{r load-tables}
+union_df <- fread(cmd = "bgzip -dc -@ 8 Tables/union-peaks-cons.bed.gz")
+peak_df <- union_df[is_peak == TRUE]
+nrow(peak_df)
+nrow(union_df)
+```
+
+# Sample overview
+```{r sample-overview}
+# Peak-level summary (is_peak == TRUE)
+sample_summary <- peak_df[, .(
+    n_cons_peaks = .N,
+    mean_coverage = mean(as.double(coverage), na.rm = TRUE),
+    median_coverage = median(as.double(coverage), na.rm = TRUE),
+    mean_acc = mean(fire_cov_OV_cov, na.rm = TRUE)
+), by = .(Individual_ID, Haplotype, Platform, PS, sample_id)]
+
+# All-site summary (including non-peaks)
+site_summary <- union_df[, .(
+    n_total = .N,
+    n_with_asm = sum(!is.na(asm_chr)),
+    n_with_hg38 = sum(!is.na(hg38_chr)),
+    frac_asm = mean(!is.na(asm_chr)),
+    frac_hg38 = mean(!is.na(hg38_chr))
+), by = .(Individual_ID, Haplotype, Platform, PS, sample_id)]
+
+sample_summary
+```
+
+# Peaks per sample by haplotype
+```{r union-peaks-qc-peaks-per-hap}
+sample_summary %>%
+    # filter(!is.na(asm_chr)) %>%
+    ggplot(aes(x = as.factor(Haplotype), y = n_cons_peaks)) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color = "black", fill = NA) +
+    scale_y_continuous("# of peaks per haplotype", labels = comma) +
+    scale_x_discrete("Haplotype") +
+    # scale_color_manual(values = PLAT_COLORS) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-peaks-qc-peaks-per-hap.pdf", width = 2, height = 2)
+```
+
+# Peaks per haplotype by HDCA class
+```{r union-peaks-qc-unique-res}
+re_per_hap <- peak_df[, .(
+    n_peaks = .N
+), by = .(sample_id, ind_key, Individual_ID, Platform, Haplotype)]
+
+re_per_hap %>%
+    ggplot(aes(x = as.factor(Haplotype), y = n_peaks)) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color = "black", fill = NA) +
+    scale_y_continuous("# regulatory elements per haplotype", labels = comma) +
+    scale_x_discrete("Haplotype") +
+    my_grid()
+my_ggsave("Figures/union-peaks-qc-unique-res.pdf", width = 2, height = 2)
+```
+
+# REs per haplotype by HDCA class
+```{r union-peaks-qc-unique-res-by-class}
+re_by_class <- peak_df[autosome == "Autosomes", .(
+    n_res = .N
+), by = .(sample_id, ind_key, Individual_ID, Platform, Haplotype, haplotype_distinct)]
+
+re_by_class[, haplotype_distinct := factor(
+    haplotype_distinct,
+    levels = HDCA_ORDER
+)]
+
+# compute median % of testable REs per class (excluding Untestable from denominator)
+testable_total <- re_by_class[
+    !is.na(haplotype_distinct) & haplotype_distinct != "Untestable",
+    .(testable_total = sum(n_res)),
+    by = sample_id
+]
+re_pct <- merge(re_by_class, testable_total, by = "sample_id")[
+    !is.na(haplotype_distinct) & haplotype_distinct != "Untestable",
+    .(median_pct = median(100 * n_res / testable_total)),
+    by = haplotype_distinct
+][, label := paste0(round(median_pct, 1), "%")]
+
+re_by_class %>%
+    filter(!is.na(haplotype_distinct)) %>%
+    ggplot(aes(
+        y = haplotype_distinct, x = n_res,
+        fill = haplotype_distinct, color = haplotype_distinct
+    )) +
+    geom_quasirandom(
+        method = "pseudorandom", size = 1, shape = 21,
+        alpha = 0.3, stroke = 0.3, groupOnX = FALSE
+    ) +
+    geom_violin(color = "black", fill = NA, scale = "width", width = 0.7) +
+    geom_text(
+        data = re_pct,
+        aes(
+            x = 0, y = haplotype_distinct, label = label,
+            color = NULL, fill = NULL
+        ),
+        hjust = -0.1, size = 2
+    ) +
+    scale_x_continuous("# regulatory elements", labels = comma) +
+    scale_fill_manual(values = alpha(HDCA_COLORS, 0.5)) +
+    scale_color_manual(values = colorspace::darken(HDCA_COLORS, 0.3)) +
+    ylab("") +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/union-peaks-qc-unique-res-by-class.pdf",
+    width = 3, height = 2
+)
+```
+
+# H1 vs H2 accessibility for epigenetically haplotype-selective peaks
+```{r union-peaks-qc-epi-hap-sel-scatter}
+epi_sel <- peak_df[haplotype_distinct == "Epigenetically haplotype-selective"]
+
+epi_wide <- merge(
+    epi_sel[Haplotype == "1", .(ind_key, consensus_peak_id, acc_1 = fire_cov_OV_cov)],
+    epi_sel[Haplotype == "2", .(ind_key, consensus_peak_id, acc_2 = fire_cov_OV_cov)],
+    by = c("ind_key", "consensus_peak_id")
+)
+
+epi_wide[, more_acc := fifelse(acc_1 > acc_2, "H1 > H2", "H2 > H1")] %>%
+    ggplot(aes(x = acc_1, y = acc_2)) +
+    geom_hex(bins = 50) +
+    geom_xsidefreqpoly(aes(color = more_acc), alpha = 0.75, binwidth = 0.03) +
+    geom_ysidefreqpoly(aes(color = more_acc), alpha = 0.75, binwidth = 0.03) +
+    scale_fill_distiller("",
+        palette = "Spectral",
+        trans = "log10"
+    ) +
+    scale_color_manual("", values = c("H1 > H2" = "steelblue", "H2 > H1" = "firebrick")) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    scale_x_continuous("H1 accessibility", labels = percent, limits = c(NA, 1)) +
+    scale_y_continuous("H2 accessibility", labels = percent, limits = c(NA, 1)) +
+    scale_xsidey_continuous(labels = NULL) +
+    scale_ysidex_continuous(labels = NULL) +
+    my_grid() +
+    theme(
+        legend.position = "right",
+        ggside.panel.scale = 0.2,
+        aspect.ratio = 1,
+    )
+
+my_ggsave("Figures/union-peaks-qc-epi-hap-sel-scatter.pdf",
+    width = 3, height = 3
+)
+```
+
+# Sanity check: rows per (ind_key, consensus_peak_id) — should always be 2
+```{r union-peaks-qc-rows-per-peak}
+rows_per_peak <- union_df[, .N, by = .(ind_key, consensus_peak_id)]
+rows_per_peak[, .N, by = N]
+```
+
+# H1 vs H2 peak counts per individual
+```{r union-peaks-qc-h1-vs-h2-peaks}
+h1_h2 <- sample_summary[, .(
+    n_cons_peaks_1 = n_cons_peaks[Haplotype == "1"],
+    n_cons_peaks_2 = n_cons_peaks[Haplotype == "2"]
+), by = .(Individual_ID, Platform, PS)]
+
+h1_h2 %>%
+    filter(!is.na(Platform)) %>%
+    ggplot(aes(x = n_cons_peaks_1, y = n_cons_peaks_2, color = Platform)) +
+    geom_point(alpha = 0.7) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    scale_x_continuous("H1 peaks", labels = comma) +
+    scale_y_continuous("H2 peaks", labels = comma) +
+    scale_color_manual(values = PLAT_COLORS) +
+    coord_equal() +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-peaks-qc-h1-vs-h2-peaks.pdf", width = 2, height = 2)
+```
+
+# Coverage distribution per sample
+```{r union-peaks-qc-coverage-per-sample}
+sample_summary %>%
+    filter(!is.na(Platform)) %>%
+    ggplot(aes(x = "", y = mean_coverage, color = Platform)) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color = "black", fill = NA) +
+    scale_y_continuous("Mean fiber-seq coverage") +
+    xlab("") +
+    scale_color_manual(values = PLAT_COLORS) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-peaks-qc-coverage-per-sample.pdf",
+    width = 2, height = 2
+)
+```
+
+# Accessibility distribution (sampled)
+```{r union-peaks-qc-accessibility-dist}
+set.seed(42)
+plot_sample <- peak_df[sample(.N, min(.N, 1e6))]
+
+plot_sample %>%
+    filter(!is.na(Platform)) %>%
+    ggplot(aes(x = fire_cov_OV_cov, fill = Platform)) +
+    geom_density(alpha = 0.5) +
+    scale_x_continuous("Accessibility (FIRE / total coverage)",
+        limits = c(0, 1)
+    ) +
+    scale_fill_manual(values = PLAT_COLORS) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-peaks-qc-accessibility-dist.pdf",
+    width = 3, height = 2
+)
+```
+
+# Accessibility by haplotype
+```{r union-peaks-qc-accessibility-by-hap}
+plot_sample %>%
+    ggplot(aes(x = fire_cov_OV_cov, fill = Haplotype)) +
+    geom_density(alpha = 0.5) +
+    scale_x_continuous("Accessibility (FIRE / total coverage)",
+        limits = c(0, 1)
+    ) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-peaks-qc-accessibility-by-hap.pdf",
+    width = 3, height = 2
+)
+```
+
+# Fraction with assembly mapping
+```{r union-peaks-qc-asm-mapping-rate}
+site_summary %>%
+    filter(!is.na(Platform)) %>%
+    ggplot(aes(x = "", y = frac_asm, color = Platform)) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color = "black", fill = NA) +
+    scale_y_continuous("Fraction with assembly mapping",
+        labels = percent, limits = c(0, 1)
+    ) +
+    xlab("") +
+    scale_color_manual(values = PLAT_COLORS) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-peaks-qc-asm-mapping-rate.pdf",
+    width = 2, height = 2
+)
+```
+
+# Fraction with hg38 liftover
+```{r union-peaks-qc-hg38-liftover-rate}
+site_summary %>%
+    filter(!is.na(Platform)) %>%
+    ggplot(aes(x = "", y = frac_hg38, color = Platform)) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color = "black", fill = NA) +
+    scale_y_continuous("Fraction with hg38 liftover",
+        labels = percent, limits = c(0, 1)
+    ) +
+    xlab("") +
+    scale_color_manual(values = PLAT_COLORS) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-peaks-qc-hg38-liftover-rate.pdf",
+    width = 2, height = 2
+)
+```
+
+# Original peak recovery
+```{r union-peaks-qc-orig-peak-recovery}
+peak_df[!is.na(Platform),
+    .(frac_orig = mean(overlaps_original_called_peak == TRUE)),
+    by = .(Individual_ID, Platform, Haplotype, sample_id)
+] %>%
+    ggplot(aes(x = "", y = frac_orig * 100, color = Platform)) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color = "black", fill = NA) +
+    scale_y_continuous("% peaks overlapping original call") +
+    xlab("") +
+    scale_color_manual(values = PLAT_COLORS) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-peaks-qc-orig-peak-recovery.pdf",
+    width = 2, height = 2
+)
+```
+
+# SD overlap rate per sample
+```{r union-peaks-qc-sd-rate}
+peak_df[, .(
+    frac_sd = mean(is_SD)
+), by = .(Individual_ID, Platform, Haplotype, sample_id)] %>%
+    filter(!is.na(Platform)) %>%
+    ggplot(aes(x = "", y = frac_sd, color = Platform)) +
+    geom_quasirandom(method = "pseudorandom") +
+    geom_violin(color = "black", fill = NA) +
+    scale_y_continuous("Fraction of peaks in segmental duplications",
+        labels = percent
+    ) +
+    xlab("") +
+    scale_color_manual(values = PLAT_COLORS) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-peaks-qc-sd-rate.pdf", width = 2, height = 2)
+```
+
+# Autosome vs sex chromosome counts
+```{r union-peaks-qc-autosome-vs-sex}
+peak_df[, .(
+    n_auto = sum(autosome == "Autosomes"),
+    n_sex = sum(autosome == "Sex chromosome")
+), by = .(Individual_ID, Platform, Haplotype, sample_id)] %>%
+    filter(!is.na(Platform)) %>%
+    ggplot(aes(x = n_auto, y = n_sex, color = Platform)) +
+    geom_point(alpha = 0.7) +
+    scale_x_continuous("Autosomal peaks", labels = comma) +
+    scale_y_continuous("Sex chromosome peaks", labels = comma) +
+    scale_color_manual(values = PLAT_COLORS) +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/union-peaks-qc-autosome-vs-sex.pdf",
+    width = 2, height = 2
+)
+```
+
+# Peak size distribution
+```{r union-peaks-qc-peak-size}
+set.seed(42)
+peak_df[sample(.N, min(.N, 500000))] %>%
+    mutate(size = end - start) %>%
+    ggplot(aes(x = size)) +
+    geom_density(fill = "steelblue", alpha = 0.5) +
+    scale_x_continuous("Peak size (bp)",
+        trans = "log10", labels = comma,
+        limits = c(50, 5000)
+    ) +
+    annotation_logticks(sides = "b") +
+    my_grid()
+my_ggsave("Figures/union-peaks-qc-peak-size.pdf", width = 3, height = 2)
+```
+
+# Haplotype classification summary
+```{r union-peaks-qc-hap-class-summary}
+hap_counts <- union_df[
+    autosome == "Autosomes" &
+        !is.na(haplotype_distinct) & haplotype_distinct != "Untestable",
+    .N,
+    by = haplotype_distinct
+][, `:=`(
+    total = sum(N),
+    frac = N / sum(N),
+    label = paste0(comma(N), " (", round(100 * N / sum(N), 1), "%)")
+)]
+hap_counts[, haplotype_distinct := factor(
+    haplotype_distinct,
+    levels = HDCA_ORDER
+)]
+
+hap_counts %>%
+    ggplot(aes(
+        x = N, y = haplotype_distinct,
+        fill = haplotype_distinct
+    )) +
+    geom_bar(stat = "identity") +
+    geom_text(aes(x = 0, label = label),
+        hjust = -0.05, size = 2, color = "black"
+    ) +
+    scale_fill_manual(values = HDCA_COLORS) +
+    scale_x_continuous("# of regulatory elements", labels = comma) +
+    ylab("") +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/union-peaks-qc-hap-class-summary.pdf",
+    width = 3, height = 2
+)
+```
+
+# Accessibility difference by haplotype classification
+```{r union-peaks-qc-diff-by-hdca}
+union_df[autosome == "Autosomes" & !is.na(haplotype_distinct)] %>%
+    mutate(
+        # for genetically haplotype-specific, use the peak haplotype's accessibility as diff
+        diff_plot = case_when(
+            haplotype_distinct == "Genetically haplotype-specific" ~ fire_cov_OV_cov,
+            TRUE ~ diff
+        )
+    ) %>%
+    filter(!is.na(diff_plot)) %>%
+    mutate(haplotype_distinct = factor(
+        haplotype_distinct,
+        levels = HDCA_ORDER
+    )) %>%
+    ggplot(aes(x = diff_plot, fill = haplotype_distinct)) +
+    geom_density(alpha = 0.5, adjust = 1) +
+    scale_x_continuous(
+        "Accessibility difference (H1 - H2)",
+        limits = c(-1, 1)
+    ) +
+    scale_fill_manual(values = HDCA_COLORS) +
+    facet_wrap(~haplotype_distinct, scales = "free_y", ncol = 1) +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/union-peaks-qc-diff-by-hdca.pdf",
+    width = 3, height = 3
+)
+```
