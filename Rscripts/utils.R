@@ -59,6 +59,18 @@ PLAT_COLORS <- c(
     ONT = Indigo # blue
 )
 
+HDCA_COLORS <- c(
+    "Genetically haplotype-specific" = "#f0a500",
+    "Epigenetically haplotype-selective" = "purple",
+    "Haplotype-distinct" = "#8b0000",
+    "Complex" = "#ff5733",
+    "Shared" = "#888888",
+    "chrX" = "#e377c2",
+    "chrY" = "#17becf",
+    "Untestable" = "#cccccc"
+)
+HDCA_ORDER <- names(HDCA_COLORS)
+
 read_m6a <- function(file, my_tag = "", min_ml = 200, nrows = Inf, ref = TRUE) {
     tmp <- fread(glue(file), nrows = nrows) %>%
         filter(en - st > 0.5 * fiber_length | (en == 0 & st == 0)) %>%

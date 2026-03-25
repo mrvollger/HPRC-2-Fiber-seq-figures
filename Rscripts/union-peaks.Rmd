@@ -10,8 +10,8 @@ DIFF_THRESHOLD <- 0.25
 MIN_HAP_COV <- 10
 
 # TRUE = load test subset (2 ind_keys: 1 PacBio + 1 ONT), FALSE = full data
-USE_TEST <- FALSE
 USE_TEST <- TRUE
+USE_TEST <- FALSE
 
 UNION_PEAKS_FILE <- "/mmfs1/gscratch/stergachislab/HPRC/fiber-seq-pilot/HLA_graphs/peak_calling_all_chrs/All_HPRC_peaks_NewGraph_w_HG002/All_HPRC_peaks_NewGraph_w_HG002_final_tbl_w_metadata.tsv"
 TEST_FILE <- "Tables/union-peaks-test-input.tsv.gz"
@@ -123,32 +123,16 @@ union_df <- raw_df %>%
             grepl("chrX|chrY", asm_chr) | grepl("chrX|chrY", chrom_hg38) ~ "Sex chromosome",
             TRUE ~ "Autosomes"
         ),
+        # many-to-one: multiple original asm peaks merged into one consensus peak
+        is_complex = num_overlapping_orig_peaks > 1,
     ) %>%
     data.table()
+
+cat("Merged (many asm -> 1 cons):", sum(union_df$is_complex), "\n")
 
 glimpse(union_df)
 ```
 
-# QC: summary stats
-```{r summary-stats}
-cat("Samples:", uniqueN(union_df$sample_id), "\n")
-cat("Individuals:", uniqueN(union_df$Individual_ID), "\n")
-cat("Consensus peaks:", uniqueN(union_df$consensus_peak_id), "\n")
-
-union_df %>%
-    group_by(Platform) %>%
-    summarise(
-        n_samples = n_distinct(sample_id),
-        n_individuals = n_distinct(Individual_ID),
-    )
-```
-
-# QC: peaks per sample
-```{r qc-peaks-per-sample}
-union_df %>%
-    group_by(sample_id) %>%
-    summarise(n_peaks = sum(is_peak))
-```
 
 # ============================================================
 # Haplotype analysis: pivot wide, classify, merge back
@@ -163,7 +147,8 @@ keep_cols <- c(
 )
 val_cols <- c(
     "coverage", "fire_coverage", "fire_cov_OV_cov",
-    "is_peak", "asm_chr", "chrom_hg38", "is_SD", "autosome"
+    "is_peak", "asm_chr", "chrom_hg38", "is_SD", "autosome",
+    "is_complex"
 )
 
 h1 <- union_df[Haplotype == "1", c(merge_cols, keep_cols, val_cols), with = FALSE]
@@ -176,6 +161,7 @@ hap_wide <- merge(h1, h2, by = merge_cols, all = TRUE)
 # derive combined and haplotype metrics
 hap_wide[, `:=`(
     is_SD = fcoalesce(is_SD_1, FALSE) | fcoalesce(is_SD_2, FALSE),
+    is_complex = fcoalesce(is_complex_1, FALSE) | fcoalesce(is_complex_2, FALSE),
     autosome = fifelse(
         autosome_1 %in% "Sex chromosome" | autosome_2 %in% "Sex chromosome",
         "Sex chromosome", "Autosomes"
@@ -196,6 +182,14 @@ cat("Rows in hap_wide:", nrow(hap_wide), "\n")
 
 # classify haplotype status
 hap_wide[, haplotype_distinct := fcase(
+    # sex chromosomes: separate categories (hemizygous in males)
+    grepl("chrX", chrom_hg38_1, fixed = TRUE) | grepl("chrX", chrom_hg38_2, fixed = TRUE),
+    "chrX",
+    grepl("chrY", chrom_hg38_1, fixed = TRUE) | grepl("chrY", chrom_hg38_2, fixed = TRUE),
+    "chrY",
+    # complex: multiple asm peaks merged into one consensus peak
+    is_complex,
+    "Complex",
     # genetically haplotype-specific: peak on one hap, no assembly on other
     peak_status == "H1_only" & is.na(asm_chr_2),
     "Genetically haplotype-specific",
@@ -232,7 +226,7 @@ bgz_write <- function(dt, path) {
     # rename first col to #chrom for BED convention
     names(dt)[1] <- paste0("#", names(dt)[1])
     tmp <- sub("\\.gz$", "", path)
-    fwrite(dt, tmp, sep = "\t", quote = FALSE)
+    fwrite(dt, tmp, sep = "\t", quote = FALSE, na = "NA")
     system(paste("bgzip -@ 4 -f", shQuote(tmp)))
     cat("Saved", path, "\n")
 }
@@ -268,23 +262,11 @@ hg38_df <- union_hap_df %>%
     arrange(chrom, start, end)
 bgz_write(hg38_df, "Tables/union-peaks-hg38.bed.gz")
 
-# Filtered versions: only rows with asm_peak_id (assembly-level peak calls)
-bgz_write(
-    cons_df %>% filter(!is.na(asm_peak_id)),
-    "Tables/union-peaks-cons-with-asm-peak.bed.gz"
-)
-bgz_write(
-    chm13_df %>% filter(!is.na(asm_peak_id)),
-    "Tables/union-peaks-chm13-with-asm-peak.bed.gz"
-)
-bgz_write(
-    asm_df %>% filter(!is.na(asm_peak_id)),
-    "Tables/union-peaks-asm-with-asm-peak.bed.gz"
-)
-bgz_write(
-    hg38_df %>% filter(!is.na(asm_peak_id)),
-    "Tables/union-peaks-hg38-with-asm-peak.bed.gz"
-)
+# Peak-only versions (is_peak == TRUE)
+bgz_write(cons_df[is_peak == TRUE], "Tables/peaks-cons.bed.gz")
+bgz_write(chm13_df[is_peak == TRUE], "Tables/peaks-chm13.bed.gz")
+bgz_write(asm_df[is_peak == TRUE], "Tables/peaks-asm.bed.gz")
+bgz_write(hg38_df[is_peak == TRUE], "Tables/peaks-hg38.bed.gz")
 
 # Write README describing outputs and columns
 readme <- glue('
@@ -301,10 +283,20 @@ All files are bgzipped BED files with a `#chrom` header line.
 Each file contains the same columns but with different leading coordinates
 (renamed to chrom/start/end), filtered to rows where those coordinates exist.
 
+### All sites (every sample x consensus peak that passes in at least one sample)
 - `union-peaks-cons.bed.gz`: All rows, leading coords are consensus (graph) coordinates
 - `union-peaks-chm13.bed.gz`: Subset where consensus coords are bare chr* names (T2T-CHM13 reference paths)
 - `union-peaks-asm.bed.gz`: Rows with assembly coordinates (not NA)
 - `union-peaks-hg38.bed.gz`: Rows with hg38 liftover coordinates (not NA)
+
+### Peak-only (is_peak == TRUE)
+Filtered to rows where the consensus peak passes thresholds in that specific sample
+(fire_coverage >= {MIN_FIRE_COV} AND fire_cov_OV_cov >= {MIN_FRAC_ACC}).
+Each row represents a called peak in a specific sample/haplotype.
+- `peaks-cons.bed.gz`: Peaks only, consensus coordinates
+- `peaks-chm13.bed.gz`: Peaks only, CHM13 coordinates
+- `peaks-asm.bed.gz`: Peaks only, assembly coordinates
+- `peaks-hg38.bed.gz`: Peaks only, hg38 coordinates
 
 ## Columns (in output order)
 
@@ -344,10 +336,14 @@ Each file contains the same columns but with different leading coordinates
 | 32 | is_SD | Whether either coordinate set overlaps a segmental duplication |
 | 33 | chrom_hg38 | hg38 chromosome name for the assembly contig (from chromosome alias table) |
 | 34 | autosome | "Autosomes" or "Sex chromosome", based on chrom_hg38/asm_chr |
-| 35 | haplotype_distinct | Haplotype classification (see below) |
-| 36 | diff | Accessibility difference between haplotypes (fire_cov_OV_cov H1 - H2) |
+| 35 | is_complex | Whether multiple original assembly peaks were merged into this consensus peak (num_overlapping_orig_peaks > 1) |
+| 36 | haplotype_distinct | Haplotype classification (see below) |
+| 37 | diff | Accessibility difference between haplotypes (fire_cov_OV_cov H1 - H2) |
 
 ### haplotype_distinct categories
+- **chrX**: Peak on chrX (excluded from autosomal haplotype analysis)
+- **chrY**: Peak on chrY (excluded from autosomal haplotype analysis)
+- **Complex**: Multiple original assembly peaks merged into this consensus peak on either haplotype
 - **Genetically haplotype-specific**: Peak on one haplotype, no assembly mapping on the other
 - **Epigenetically haplotype-selective**: Sufficient coverage (>= {MIN_HAP_COV}) and |diff| >= {DIFF_THRESHOLD}
 - **Shared**: Sufficient coverage and |diff| < {DIFF_THRESHOLD}

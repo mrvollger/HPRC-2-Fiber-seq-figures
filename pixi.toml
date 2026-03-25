@@ -8,6 +8,7 @@ version = "0.1.0"
 
 [tasks]
 mrvplot = "Rscript -e 'devtools::install_github(\"mrvollger/mrvplot\")'"
+union-peaks = "Rscript -e 'rmarkdown::render(\"Rscripts/union-peaks.Rmd\", output_dir=\"Tables\", knit_root_dir=getwd())'"
 
 
 [dependencies]
