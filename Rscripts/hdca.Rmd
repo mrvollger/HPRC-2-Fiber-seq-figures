@@ -1,0 +1,269 @@
+```{r setup}
+source("Rscripts/utils.R")
+# Column definitions: see Tables/union-peaks-README.md
+```
+
+# Load tables (produced by union-peaks.Rmd)
+```{r load-tables}
+peak_df <- my_read_bed(cmd = "bgzip -dc -@ 8 Tables/peaks-cons.bed.gz", sort = FALSE)
+auto_peak_df <- peak_df[
+    autosome == "Autosomes" & !haplotype_distinct %in% c("chrX", "chrY")
+]
+
+auto_peak_df %>%
+    group_by(haplotype_distinct) %>%
+    summarise(n = n()) %>%
+    mutate(frac = n / sum(n)) %>%
+    arrange(desc(frac))
+```
+
+# REs per haplotype by HDCA class
+```{r hdca-res-by-class}
+re_by_class <- auto_peak_df[, .(
+    n_res = .N
+), by = .(sample_id, ind_key, Individual_ID, Platform, Haplotype, haplotype_distinct)]
+
+re_by_class[, haplotype_distinct := factor(
+    haplotype_distinct,
+    levels = HDCA_ORDER
+)]
+
+# compute median % of testable REs per class (excluding Untestable from denominator)
+testable_total <- re_by_class[
+    !is.na(haplotype_distinct) & haplotype_distinct != "Untestable",
+    .(testable_total = sum(n_res)),
+    by = sample_id
+]
+re_pct <- merge(re_by_class, testable_total, by = "sample_id")[
+    !is.na(haplotype_distinct) & haplotype_distinct != "Untestable",
+    .(median_pct = median(100 * n_res / testable_total)),
+    by = haplotype_distinct
+][, label := paste0(round(median_pct, 1), "%")]
+
+re_by_class %>%
+    filter(!is.na(haplotype_distinct)) %>%
+    ggplot(aes(
+        y = haplotype_distinct, x = n_res,
+        fill = haplotype_distinct, color = haplotype_distinct
+    )) +
+    geom_quasirandom(
+        method = "pseudorandom", size = 1, shape = 21,
+        alpha = 0.3, stroke = 0.3, groupOnX = FALSE
+    ) +
+    geom_violin(color = "black", fill = NA, scale = "width", width = 0.7) +
+    geom_text(
+        data = merge(re_pct, re_by_class[!is.na(haplotype_distinct),
+            .(median_x = median(n_res)),
+            by = haplotype_distinct
+        ]),
+        aes(
+            x = median_x, y = haplotype_distinct, label = label,
+            color = NULL, fill = NULL
+        ),
+        vjust = -2, hjust = 0.5, size = 2
+    ) +
+    scale_x_continuous(
+        "# regulatory elements",
+        labels = comma,
+        trans = "log10"
+    ) +
+    scale_fill_manual(values = alpha(HDCA_COLORS, 0.5)) +
+    scale_color_manual(values = colorspace::darken(HDCA_COLORS, 0.3)) +
+    ylab("") +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/hdca-res-by-class.pdf",
+    width = 3, height = 2
+)
+```
+
+# Haplotype classification summary (total across all samples)
+```{r hdca-class-summary}
+hap_summary <- re_by_class[
+    !is.na(haplotype_distinct),
+    .(n = sum(n_res)),
+    by = haplotype_distinct
+]
+# percentages exclude Untestable from denominator
+testable_n <- hap_summary[haplotype_distinct != "Untestable", sum(n)]
+hap_summary[, `:=`(
+    frac = fifelse(haplotype_distinct == "Untestable", NA_real_, n / testable_n),
+    label = fifelse(
+        haplotype_distinct == "Untestable",
+        comma(n),
+        paste0(comma(n), " (", round(100 * n / testable_n, 1), "%)")
+    )
+)]
+hap_summary[, haplotype_distinct := factor(
+    haplotype_distinct,
+    levels = HDCA_ORDER
+)]
+
+hap_summary %>%
+    ggplot(aes(
+        x = n, y = haplotype_distinct,
+        fill = haplotype_distinct
+    )) +
+    geom_bar(stat = "identity") +
+    geom_text(aes(x = 0, label = label),
+        hjust = -0.05, size = 2, color = "black"
+    ) +
+    scale_fill_manual(values = HDCA_COLORS) +
+    scale_x_continuous("# of regulatory elements", labels = comma) +
+    ylab("") +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/hdca-class-summary.pdf",
+    width = 3, height = 2
+)
+```
+
+# H1 vs H2 accessibility for epigenetically haplotype-selective peaks
+```{r hdca-epi-scatter}
+# use pre-computed _1/_2 columns, deduplicate to one row per peak
+epi_wide <- auto_peak_df[
+    haplotype_distinct == "Epigenetically haplotype-selective" &
+        !is.na(fire_cov_OV_cov_1) & !is.na(fire_cov_OV_cov_2),
+    .SD[1],
+    by = .(ind_key, consensus_peak_id),
+    .SDcols = c("fire_cov_OV_cov_1", "fire_cov_OV_cov_2")
+]
+cat("Epi hap-selective peaks:", nrow(epi_wide), "\n")
+
+epi_wide[, more_acc := fifelse(fire_cov_OV_cov_1 > fire_cov_OV_cov_2, "H1 > H2", "H2 > H1")] %>%
+    ggplot(aes(x = fire_cov_OV_cov_1, y = fire_cov_OV_cov_2)) +
+    geom_hex(bins = 30) +
+    geom_xsidefreqpoly(aes(color = more_acc), alpha = 0.75, binwidth = 0.03) +
+    geom_ysidefreqpoly(aes(color = more_acc), alpha = 0.75, binwidth = 0.03) +
+    scale_fill_distiller("", palette = "Spectral", trans = "log10") +
+    scale_color_manual("", values = c("H1 > H2" = "steelblue", "H2 > H1" = "firebrick")) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    scale_x_continuous("H1 accessibility", labels = percent, limits = c(NA, 1)) +
+    scale_y_continuous("H2 accessibility", labels = percent, limits = c(NA, 1)) +
+    scale_xsidey_continuous(labels = NULL) +
+    scale_ysidex_continuous(labels = NULL) +
+    my_grid() +
+    theme(
+        legend.position = "right",
+        ggside.panel.scale = 0.2,
+        aspect.ratio = 1
+    )
+my_ggsave("Figures/hdca-epi-scatter.pdf",
+    width = 3, height = 3
+)
+```
+
+# Accessibility difference by haplotype classification
+```{r hdca-diff-density}
+auto_peak_df[!is.na(haplotype_distinct)] %>%
+    mutate(
+        diff_plot = case_when(
+            haplotype_distinct == "Genetically haplotype-specific" ~ fire_cov_OV_cov,
+            TRUE ~ diff
+        )
+    ) %>%
+    filter(!is.na(diff_plot)) %>%
+    mutate(haplotype_distinct = factor(
+        haplotype_distinct,
+        levels = HDCA_ORDER
+    )) %>%
+    ggplot(aes(x = diff_plot, fill = haplotype_distinct)) +
+    geom_density(alpha = 0.5, adjust = 1) +
+    scale_x_continuous(
+        "Accessibility difference (H1 - H2)",
+        limits = c(-1, 1)
+    ) +
+    scale_fill_manual(values = HDCA_COLORS) +
+    facet_wrap(~haplotype_distinct, scales = "free_y", ncol = 1) +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/hdca-diff-density.pdf",
+    width = 3, height = 4
+)
+```
+
+# Het variant rate by HDCA class
+```{r hdca-het-by-class}
+auto_peak_df[
+    !is.na(haplotype_distinct) & haplotype_distinct != "Untestable",
+    .(het_rate = mean(has_het_variants, na.rm = TRUE)),
+    by = haplotype_distinct
+][, haplotype_distinct := factor(haplotype_distinct, levels = HDCA_ORDER)] %>%
+    ggplot(aes(x = het_rate, y = haplotype_distinct, fill = haplotype_distinct)) +
+    geom_bar(stat = "identity") +
+    geom_text(aes(label = paste0(round(100 * het_rate, 1), "%")),
+        hjust = -0.1, size = 2
+    ) +
+    scale_x_continuous("% with heterozygous variants",
+        labels = percent, limits = c(0, 1)
+    ) +
+    scale_fill_manual(values = HDCA_COLORS) +
+    ylab("") +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/hdca-het-by-class.pdf", width = 3, height = 2)
+```
+
+# Fisher's test significance by HDCA class
+```{r hdca-fisher-by-class}
+auto_peak_df[
+    !is.na(haplotype_distinct) & !is.na(fisher_p) &
+        haplotype_distinct != "Untestable",
+    .(frac_sig = mean(fisher_p < 0.05)),
+    by = haplotype_distinct
+][, haplotype_distinct := factor(haplotype_distinct, levels = HDCA_ORDER)] %>%
+    ggplot(aes(x = frac_sig, y = haplotype_distinct, fill = haplotype_distinct)) +
+    geom_bar(stat = "identity") +
+    geom_text(aes(label = paste0(round(100 * frac_sig, 1), "%")),
+        hjust = -0.1, size = 2
+    ) +
+    scale_x_continuous("% significant (Fisher p < 0.05)",
+        labels = percent, limits = c(0, 1)
+    ) +
+    scale_fill_manual(values = HDCA_COLORS) +
+    ylab("") +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/hdca-fisher-by-class.pdf", width = 3, height = 2)
+```
+
+# QQ plot of Fisher's p-values
+```{r hdca-fisher-qq}
+qq_df <- auto_peak_df[
+    haplotype_distinct %in% c("Shared", "Haplotype-selective", "Epigenetically haplotype-selective") &
+        !is.na(fisher_p),
+    .(fisher_p, haplotype_distinct, diff, coverage_1, coverage_2)
+]
+
+# rank by p-value, breaking ties by abs(diff) then total coverage
+qq_df[, rank_order := frank(list(fisher_p, -abs(diff), -(coverage_1 + coverage_2)))]
+qq_df[, expected := -log10(rank_order / (.N + 1))]
+qq_df[, observed := -log10(fisher_p)]
+
+# thin for plotting
+set.seed(42)
+n_keep <- min(nrow(qq_df), 50000)
+
+qq_df %>%
+    sample_n(n_keep) %>%
+    ggplot(aes(x = expected, y = observed)) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+    geom_line(linewidth = 0.1, color = "black", alpha = 0.25) +
+    geom_point(
+        data = . %>% group_by(haplotype_distinct) %>% sample_n(100),
+        aes(color = haplotype_distinct),
+        size = 0.1
+    ) +
+    geom_xsidedensity(
+        aes(color = haplotype_distinct),
+        alpha = 0.75
+    ) +
+    scale_color_manual(values = HDCA_COLORS) +
+    scale_x_continuous("Expected -log10(p)", limits = c(0, 4)) +
+    scale_y_continuous("Observed -log10(p)", limits = c(0, 4)) +
+    scale_xsidey_continuous(labels = NULL) +
+    coord_equal() +
+    theme(ggside.panel.scale = 0.2) +
+    my_grid()
+my_ggsave("Figures/hdca-fisher-qq.pdf", width = 3, height = 3)
+```
