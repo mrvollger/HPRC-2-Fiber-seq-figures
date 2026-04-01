@@ -1,3 +1,8 @@
+---
+params:
+  use_test: false
+---
+
 ```{r setup}
 source("Rscripts/utils.R")
 
@@ -9,9 +14,11 @@ MIN_FRAC_ACC <- 0.20
 DIFF_THRESHOLD <- 0.25
 MIN_HAP_COV <- 10
 
-# TRUE = load test subset (2 ind_keys: 1 PacBio + 1 ONT), FALSE = full data
-USE_TEST <- TRUE
-USE_TEST <- FALSE
+# TRUE = load test subset, FALSE = full data
+# When run via pixi: controlled by params$use_test
+# When run interactively: set USE_TEST manually here
+USE_TEST <- if (exists("params") && !is.null(params$use_test)) params$use_test else FALSE
+OUT_PREFIX <- ifelse(USE_TEST, "Tables/test-", "Tables/")
 
 UNION_PEAKS_FILE <- "/mmfs1/gscratch/stergachislab/HPRC/fiber-seq-pilot/HLA_graphs/peak_calling_all_chrs/All_HPRC_peaks_NewGraph_w_HG002/All_HPRC_peaks_NewGraph_w_HG002_final_tbl_w_metadata.tsv"
 TEST_FILE <- "Tables/union-peaks-test-input.tsv.gz"
@@ -86,6 +93,23 @@ raw_df <- raw_df[consensus_peak_id %in% passing_peaks]
 
 # Annotate: sample ID parsing, SD overlap, chromosome placement
 ```{r annotate}
+# SD overlap on unique coordinates only (much faster than per-row)
+cons_coords <- raw_df[, .(cons_chr, cons_start, cons_end)] %>%
+    unique() %>%
+    rename(chrom = cons_chr, start = cons_start, end = cons_end) %>%
+    bed_map(SDs, is_SD_cons = n() > 0) %>%
+    rename(cons_chr = chrom, cons_start = start, cons_end = end) %>%
+    replace_na(list(is_SD_cons = FALSE))
+cat("SD overlap on", nrow(cons_coords), "unique cons coords\n")
+
+asm_coords <- raw_df[!is.na(asm_chr), .(asm_chr, asm_start, asm_end)] %>%
+    unique() %>%
+    rename(chrom = asm_chr, start = asm_start, end = asm_end) %>%
+    bed_map(SDs, is_SD_asm = n() > 0) %>%
+    rename(asm_chr = chrom, asm_start = start, asm_end = end) %>%
+    replace_na(list(is_SD_asm = FALSE))
+cat("SD overlap on", nrow(asm_coords), "unique asm coords\n")
+
 union_df <- raw_df %>%
     mutate(
         # parse sample_id: handles both "ID_PS_Platform_ID_Hap" and "ID_ID_Hap"
@@ -103,14 +127,9 @@ union_df <- raw_df %>%
         ),
         ind_key = sub("_[12]$", "", sample_id),
     ) %>%
-    # SD overlap via consensus coords
-    rename(chrom = cons_chr, start = cons_start, end = cons_end) %>%
-    bed_map(SDs, is_SD_cons = n() > 0) %>%
-    rename(cons_chr = chrom, cons_start = start, cons_end = end) %>%
-    # SD overlap via assembly coords
-    rename(chrom = asm_chr, start = asm_start, end = asm_end) %>%
-    bed_map(SDs, is_SD_asm = n() > 0) %>%
-    rename(asm_chr = chrom, asm_start = start, asm_end = end) %>%
+    # join pre-computed SD overlaps
+    left_join(cons_coords, by = c("cons_chr", "cons_start", "cons_end")) %>%
+    left_join(asm_coords, by = c("asm_chr", "asm_start", "asm_end")) %>%
     replace_na(list(is_SD_cons = FALSE, is_SD_asm = FALSE)) %>%
     mutate(is_SD = is_SD_cons | is_SD_asm) %>%
     # join asm_chr to chromosome alias table for hg38 placement
@@ -130,6 +149,9 @@ union_df <- raw_df %>%
 
 cat("Merged (many asm -> 1 cons):", sum(union_df$is_complex), "\n")
 
+rm(raw_df, cons_coords, asm_coords)
+gc()
+
 glimpse(union_df)
 ```
 
@@ -148,11 +170,16 @@ keep_cols <- c(
 val_cols <- c(
     "coverage", "fire_coverage", "fire_cov_OV_cov",
     "is_peak", "asm_chr", "chrom_hg38", "is_SD", "autosome",
-    "is_complex"
+    "is_complex", "seq"
 )
 
 h1 <- union_df[Haplotype == "1", c(merge_cols, keep_cols, val_cols), with = FALSE]
 h2 <- union_df[Haplotype == "2", c(merge_cols, val_cols), with = FALSE]
+
+# sanity check: no duplicate keys (ensures 1:1 merge)
+stopifnot(h1[, .N, by = .(ind_key, consensus_peak_id)][N > 1, .N] == 0)
+stopifnot(h2[, .N, by = .(ind_key, consensus_peak_id)][N > 1, .N] == 0)
+
 setnames(h1, val_cols, paste0(val_cols, "_1"))
 setnames(h2, val_cols, paste0(val_cols, "_2"))
 
@@ -180,12 +207,74 @@ hap_wide[, `:=`(
 hap_wide <- hap_wide[peak_status != "neither"]
 cat("Rows in hap_wide:", nrow(hap_wide), "\n")
 
-# classify haplotype status
+cat("peak_status:\n")
+hap_wide[, .N, by = peak_status]
+```
+
+# Sequence comparison between haplotypes
+```{r seq-comparison}
+hap_wide[, `:=`(
+    seq_len_1 = nchar(seq_1),
+    seq_len_2 = nchar(seq_2)
+)]
+hap_wide[, `:=`(
+    seq_min_len = pmin(seq_len_1, seq_len_2, na.rm = TRUE),
+    seq_max_len = pmax(seq_len_1, seq_len_2, na.rm = TRUE)
+)]
+hap_wide[, sufficient_overlap := seq_min_len >= 0.75 * seq_max_len]
+
+# Levenshtein edit distance, adjusted for length difference
+# lv - |len1 - len2| gives substitutions in the best local embedding
+hap_wide[, seq_identical := seq_1 == seq_2]
+hap_wide[
+    seq_identical == FALSE,
+    edit_dist := stringdist::stringdist(seq_1, seq_2, method = "lv")
+]
+hap_wide[seq_identical == TRUE, edit_dist := 0L]
+hap_wide[, `:=`(
+    local_mismatches = edit_dist - (seq_max_len - seq_min_len),
+    pct_seq_identity = 1 - pmax(edit_dist - (seq_max_len - seq_min_len), 0) / seq_min_len,
+    has_het_variants = !sufficient_overlap | (edit_dist - (seq_max_len - seq_min_len)) > 0
+)]
+
+cat(
+    "Het variant rate:",
+    round(100 * mean(hap_wide$has_het_variants, na.rm = TRUE), 1), "%\n"
+)
+```
+
+# Fisher's exact test for haplotype accessibility difference
+```{r fisher-test}
+library(future.apply)
+plan(multisession, workers = min(availableCores(), 16))
+
+hap_wide[, nah1 := coverage_1 - fire_coverage_1]
+hap_wide[, nah2 := coverage_2 - fire_coverage_2]
+
+cat("Running Fisher's tests on", nrow(hap_wide), "rows...\n")
+hap_wide[, fisher_p := future_mapply(
+    function(a, b, c, d) {
+        if (any(is.na(c(a, b, c, d)))) {
+            return(NA_real_)
+        }
+        fisher.test(matrix(c(a, b, c, d), nrow = 2))$p.value
+    },
+    fire_coverage_1, fire_coverage_2, nah1, nah2,
+    future.seed = TRUE
+)]
+hap_wide[, c("nah1", "nah2") := NULL]
+plan(sequential)
+
+cat("Significant (p < 0.05):", sum(hap_wide$fisher_p < 0.05, na.rm = TRUE), "\n")
+
+# Classify haplotype status (single pass, using both diff AND Fisher's test)
 hap_wide[, haplotype_distinct := fcase(
-    # sex chromosomes: separate categories (hemizygous in males)
-    grepl("chrX", chrom_hg38_1, fixed = TRUE) | grepl("chrX", chrom_hg38_2, fixed = TRUE),
+    # sex chromosomes (check assembly hg38 mapping and consensus peak coords)
+    grepl("chrX", chrom_hg38_1, fixed = TRUE) | grepl("chrX", chrom_hg38_2, fixed = TRUE) |
+        grepl("^chrX", cons_chr, fixed = FALSE),
     "chrX",
-    grepl("chrY", chrom_hg38_1, fixed = TRUE) | grepl("chrY", chrom_hg38_2, fixed = TRUE),
+    grepl("chrY", chrom_hg38_1, fixed = TRUE) | grepl("chrY", chrom_hg38_2, fixed = TRUE) |
+        grepl("^chrY", cons_chr, fixed = FALSE),
     "chrY",
     # complex: multiple asm peaks merged into one consensus peak
     is_complex,
@@ -198,10 +287,13 @@ hap_wide[, haplotype_distinct := fcase(
     # insufficient coverage to test haplotype selectivity
     !pass_hap_coverage,
     "Untestable",
-    # epigenetically selective: large diff with sufficient coverage
-    abs(diff) >= DIFF_THRESHOLD,
+    # haplotype-selective: diff AND fisher, with het variants
+    abs(diff) >= DIFF_THRESHOLD & fisher_p <= 0.05 & has_het_variants == TRUE,
+    "Haplotype-selective",
+    # epigenetically haplotype-selective: diff AND fisher, no het variants
+    abs(diff) >= DIFF_THRESHOLD & fisher_p <= 0.05 & has_het_variants == FALSE,
     "Epigenetically haplotype-selective",
-    # shared: small diff with sufficient coverage
+    # shared: everything else with sufficient coverage
     default = "Shared"
 )]
 
@@ -210,7 +302,14 @@ hap_wide[, .N, by = haplotype_distinct]
 
 # Merge haplotype classification back to long format
 ```{r hap-merge-back}
-hap_class <- hap_wide[, .(ind_key, consensus_peak_id, haplotype_distinct, diff)]
+hap_class <- hap_wide[, .(
+    ind_key, consensus_peak_id, haplotype_distinct, diff,
+    has_het_variants, local_mismatches, pct_seq_identity,
+    fisher_p,
+    fire_coverage_1, fire_coverage_2, coverage_1, coverage_2
+)]
+rm(hap_wide)
+gc()
 
 union_hap_df <- merge(
     union_df, hap_class,
@@ -218,6 +317,9 @@ union_hap_df <- merge(
     all.x = TRUE
 )
 cat("Rows with haplotype class:", sum(!is.na(union_hap_df$haplotype_distinct)), "\n")
+
+rm(union_df, hap_class)
+gc()
 ```
 
 # Save tables: three coordinate versions + hap_wide
@@ -227,46 +329,77 @@ bgz_write <- function(dt, path) {
     names(dt)[1] <- paste0("#", names(dt)[1])
     tmp <- sub("\\.gz$", "", path)
     fwrite(dt, tmp, sep = "\t", quote = FALSE, na = "NA")
-    system(paste("bgzip -@ 4 -f", shQuote(tmp)))
-    cat("Saved", path, "\n")
+    system(paste("bgzip -@ 8 -f", shQuote(tmp)))
+    system(paste("tabix -@ 8 -p bed", shQuote(path)))
+    cat("Saved", path, "(", nrow(dt), "rows )\n")
 }
 
 # consensus coords (all rows)
-cons_df <- union_hap_df %>%
+union_hap_df %>%
     rename(chrom = cons_chr, start = cons_start, end = cons_end) %>%
     select(chrom, start, end, everything()) %>%
-    arrange(chrom, start, end)
-bgz_write(cons_df, "Tables/union-peaks-cons.bed.gz")
+    arrange(chrom, start, end) %>%
+    bgz_write(paste0(OUT_PREFIX, "union-peaks-cons.bed.gz"))
 
-# CHM13 coords (cons_chr with bare chr* names = CHM13)
-chm13_df <- union_hap_df %>%
+# consensus coords (peak-only)
+union_hap_df %>%
+    filter(is_peak) %>%
+    rename(chrom = cons_chr, start = cons_start, end = cons_end) %>%
+    select(chrom, start, end, everything()) %>%
+    arrange(chrom, start, end) %>%
+    bgz_write(paste0(OUT_PREFIX, "peaks-cons.bed.gz"))
+gc()
+
+# CHM13 coords
+union_hap_df %>%
     rename(chrom = cons_chr, start = cons_start, end = cons_end) %>%
     filter(grepl("^chr[0-9XY]+$", chrom)) %>%
     select(chrom, start, end, everything()) %>%
-    arrange(chrom, start, end)
-bgz_write(chm13_df, "Tables/union-peaks-chm13.bed.gz")
+    arrange(chrom, start, end) %>%
+    bgz_write(paste0(OUT_PREFIX, "union-peaks-chm13.bed.gz"))
+
+union_hap_df %>%
+    filter(is_peak) %>%
+    rename(chrom = cons_chr, start = cons_start, end = cons_end) %>%
+    filter(grepl("^chr[0-9XY]+$", chrom)) %>%
+    select(chrom, start, end, everything()) %>%
+    arrange(chrom, start, end) %>%
+    bgz_write(paste0(OUT_PREFIX, "peaks-chm13.bed.gz"))
+gc()
 
 # assembly coords
-asm_df <- union_hap_df %>%
+union_hap_df %>%
     rename(chrom = asm_chr, start = asm_start, end = asm_end) %>%
     filter(!is.na(chrom)) %>%
     select(chrom, start, end, everything()) %>%
-    arrange(chrom, start, end)
-bgz_write(asm_df, "Tables/union-peaks-asm.bed.gz")
+    arrange(chrom, start, end) %>%
+    bgz_write(paste0(OUT_PREFIX, "union-peaks-asm.bed.gz"))
+
+union_hap_df %>%
+    filter(is_peak) %>%
+    rename(chrom = asm_chr, start = asm_start, end = asm_end) %>%
+    filter(!is.na(chrom)) %>%
+    select(chrom, start, end, everything()) %>%
+    arrange(chrom, start, end) %>%
+    bgz_write(paste0(OUT_PREFIX, "peaks-asm.bed.gz"))
+gc()
 
 # hg38 coords
-hg38_df <- union_hap_df %>%
+union_hap_df %>%
     rename(chrom = hg38_chr, start = hg38_start, end = hg38_end) %>%
     filter(!is.na(chrom)) %>%
     select(chrom, start, end, everything()) %>%
-    arrange(chrom, start, end)
-bgz_write(hg38_df, "Tables/union-peaks-hg38.bed.gz")
+    arrange(chrom, start, end) %>%
+    bgz_write(paste0(OUT_PREFIX, "union-peaks-hg38.bed.gz"))
 
-# Peak-only versions (is_peak == TRUE)
-bgz_write(cons_df[is_peak == TRUE], "Tables/peaks-cons.bed.gz")
-bgz_write(chm13_df[is_peak == TRUE], "Tables/peaks-chm13.bed.gz")
-bgz_write(asm_df[is_peak == TRUE], "Tables/peaks-asm.bed.gz")
-bgz_write(hg38_df[is_peak == TRUE], "Tables/peaks-hg38.bed.gz")
+union_hap_df %>%
+    filter(is_peak) %>%
+    rename(chrom = hg38_chr, start = hg38_start, end = hg38_end) %>%
+    filter(!is.na(chrom)) %>%
+    select(chrom, start, end, everything()) %>%
+    arrange(chrom, start, end) %>%
+    bgz_write(paste0(OUT_PREFIX, "peaks-hg38.bed.gz"))
+gc()
 
 # Write README describing outputs and columns
 readme <- glue('
@@ -339,26 +472,27 @@ Each row represents a called peak in a specific sample/haplotype.
 | 35 | is_complex | Whether multiple original assembly peaks were merged into this consensus peak (num_overlapping_orig_peaks > 1) |
 | 36 | haplotype_distinct | Haplotype classification (see below) |
 | 37 | diff | Accessibility difference between haplotypes (fire_cov_OV_cov H1 - H2) |
+| 38 | has_het_variants | Whether the peak sequences differ between haplotypes (logical) |
+| 39 | local_mismatches | Number of substitutions in best local alignment of haplotype sequences |
+| 40 | pct_seq_identity | Percent sequence identity between haplotype sequences (0-1) |
+| 41 | fisher_p | Fisher exact test p-value for accessibility difference between haplotypes |
+| 42 | fire_coverage_1 | FIRE coverage on haplotype 1 for this individual |
+| 43 | fire_coverage_2 | FIRE coverage on haplotype 2 for this individual |
+| 44 | coverage_1 | Total coverage on haplotype 1 for this individual |
+| 45 | coverage_2 | Total coverage on haplotype 2 for this individual |
 
 ### haplotype_distinct categories
 - **chrX**: Peak on chrX (excluded from autosomal haplotype analysis)
 - **chrY**: Peak on chrY (excluded from autosomal haplotype analysis)
 - **Complex**: Multiple original assembly peaks merged into this consensus peak on either haplotype
 - **Genetically haplotype-specific**: Peak on one haplotype, no assembly mapping on the other
-- **Epigenetically haplotype-selective**: Sufficient coverage (>= {MIN_HAP_COV}) and |diff| >= {DIFF_THRESHOLD}
-- **Shared**: Sufficient coverage and |diff| < {DIFF_THRESHOLD}
+- **Haplotype-selective**: |diff| >= {DIFF_THRESHOLD} AND Fisher p <= 0.05, with het variants between haplotype sequences
+- **Epigenetically haplotype-selective**: |diff| >= {DIFF_THRESHOLD} AND Fisher p <= 0.05, with identical haplotype sequences
+- **Shared**: Sufficient coverage but does not meet both diff and Fisher thresholds
 - **Untestable**: Insufficient coverage on one or both haplotypes to determine
 - **NA**: Peak not called on either haplotype for this individual
 ')
 
-writeLines(readme, "Tables/union-peaks-README.md")
+writeLines(readme, paste0(OUT_PREFIX, "union-peaks-README.md"))
 cat("Saved Tables/union-peaks-README.md\n")
 ```
-
-
-```{r}
-nrow(cons_df)
-nrow(cons_df[!is.na(asm_peak_id)])
-glimpse(cons_df)
-```
-

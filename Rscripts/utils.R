@@ -61,6 +61,7 @@ PLAT_COLORS <- c(
 
 HDCA_COLORS <- c(
     "Genetically haplotype-specific" = "#f0a500",
+    "Haplotype-selective" = "#8b0000",
     "Epigenetically haplotype-selective" = "purple",
     "Haplotype-distinct" = "#8b0000",
     "Complex" = "#ff5733",
