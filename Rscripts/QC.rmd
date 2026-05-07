@@ -1,0 +1,273 @@
+```{r}
+source("Rscripts/utils.R")
+```
+
+```{r}
+all_manifest <- read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQANHblpVkMcVMWUvYas6JQl0pqvgeiYDlWwG2xV9vQdihgTsdWqHfl0z5BKb1I8hXcQtH1WIhwTkII/pub?output=csv") %>%
+    # filter(Individual_ID != "HG02275") %>%
+    filter(!is.na(raw_bam), raw_bam != "") %>%
+    filter(!is.na(dsa), dsa != "") %>%
+    filter(ID != "HG002_PS01015_PacBio", ID != "GM12878_PM00001_PacBio") %>%
+    data.table()
+glimpse(all_manifest)
+glimpse(tail(all_manifest))
+all_manifest %>%
+    as.tibble()
+all_manifest$ID
+colnames(all_manifest)
+
+all_manifest %>%
+    fwrite("../fiber-seq-pilot/online-manifest.tbl", row.names = FALSE, quote = FALSE, sep = "\t")
+
+manifest <- all_manifest
+glimpse(manifest)
+```
+
+# load post-FIRE-filter QC tables (one row table per sample)
+```{r}
+read_qc <- function(x) {
+    z <- fread(x)
+    z$qc <- x
+    z
+}
+# Vollger lab Redwood path; falls back to Stergachis lab path if running there.
+qc_post_fire_files <- Sys.glob(
+    "/scratch/ucgd/lustre-labs/vollger/projects/HPRCv2/fiber-seq-pilot/DSA-phasing/results/*.fire.filter.qc.tbl.gz"
+)
+if (length(qc_post_fire_files) == 0) {
+    qc_post_fire_files <- Sys.glob(
+        "/mmfs1/gscratch/stergachislab/HPRC/fiber-seq-pilot/DSA-FIRE/results/*/*qc.tbl.gz"
+    )
+}
+qc_post_fire_files <- sort(qc_post_fire_files)
+
+qc_fire_raw <- rbindlist(lapply(qc_post_fire_files, read_qc), idcol = "file")
+qc_fire_raw[, uID := str_remove(basename(qc), "[.-].*")]
+qc_fire_raw[, c("qc", "file") := NULL]
+
+# Build a small per-sample lookup of (uID -> Individual_ID, PS, Platform)
+# from the unique uIDs, then join it onto the big qc table. Doing the
+# separate() on unique uIDs (~44 rows) instead of all ~70M rows is
+# orders of magnitude faster.
+# Drops the aggregate HG002_PS01015_PacBio (pilot-depth) because the
+# HG002 deep aggregate is added back as its own group.
+sample_lookup <- data.table(uID = unique(qc_fire_raw$uID))[
+    uID != "HG002_PS01015_PacBio"
+][, `:=`(
+    Individual_ID = fifelse(
+        uID == "HG002", "HG002",
+        str_extract(uID, "^[^_]+")
+    ),
+    PS = fifelse(uID == "HG002", "HG002", str_extract(uID, "PS[0-9]+")),
+    # Platform = sequencing technology. HG002 deep aggregate is PacBio.
+    Platform = fcase(
+        uID == "HG002", "PacBio",
+        grepl("_PacBio$", uID), "PacBio",
+        grepl("_ONT$", uID), "ONT"
+    ),
+    # group = reporting bucket. HG002 (added-on extra deep sample) is
+    # tracked separately from the pilot PacBio/ONT samples.
+    group = fcase(
+        uID == "HG002", "HG002",
+        grepl("_PacBio$", uID), "PacBio",
+        grepl("_ONT$", uID), "ONT"
+    )
+)][!is.na(Platform)]
+
+setkey(qc_fire_raw, uID)
+setkey(sample_lookup, uID)
+qc_fire_df <- qc_fire_raw[sample_lookup, nomatch = 0L]
+qc_fire_df
+```
+
+# helpers used below
+```{r}
+n50_fun <- function(lengths, counts) {
+    if (missing(counts)) counts <- rep(1, length(lengths))
+    tdf <- data.frame(lengths = lengths, counts = counts) %>%
+        arrange(lengths) %>%
+        mutate(cum_counts = cumsum(counts * lengths)) %>%
+        summarise(
+            total_counts = sum(counts * lengths, na.rm = TRUE),
+            n50 = lengths[cum_counts >= total_counts / 2][1]
+        )
+    tdf$n50[[1]]
+}
+```
+
+# Build per-sample summary used by all paragraph chunks below.
+# Total Gbp = sum of `phased_bp` (H1+H2+UNK) per sample.
+# N50      = N50 of `fiber_length` distribution per sample.
+```{r}
+sample_summary <- qc_fire_df %>%
+    filter(statistic == "phased_bp") %>%
+    group_by(uID, Individual_ID, PS, Platform, group) %>%
+    summarise(
+        total_Gbp = sum(as.numeric(count), na.rm = TRUE) / 1e9,
+        .groups = "drop"
+    ) %>%
+    left_join(
+        qc_fire_df %>%
+            filter(statistic == "fiber_length") %>%
+            mutate(value = as.numeric(value)) %>%
+            group_by(uID, Individual_ID, PS, Platform, group) %>%
+            summarise(
+                n50 = n50_fun(value, as.numeric(count)),
+                .groups = "drop"
+            ),
+        by = c("uID", "Individual_ID", "PS", "Platform", "group")
+    )
+
+fwrite(sample_summary, "Tables/QC-per-sample-summary.tsv", sep = "\t")
+```
+
+# ---------------------------------------------------------------
+# Q1: "For *** of the assemblies, we also generated long-read
+# chromatin epigenomic data..."  -> count of unique individuals.
+# ---------------------------------------------------------------
+```{r}
+n_indiv <- n_distinct(sample_summary$Individual_ID)
+cat("Q1 — assemblies with Fiber-seq:", n_indiv, "\n")
+```
+
+# ---------------------------------------------------------------
+# Q2 & Q3: "*** of the HPRC Fiber-seq-treated samples were
+# subjected to PacBio sequencing (median Gbp ***, N50 ***), ***
+# to ONT sequencing (median Gbp ***, N50 ***)"
+# ---------------------------------------------------------------
+```{r}
+platform_summary <- sample_summary %>%
+    group_by(group) %>%
+    summarise(
+        n_samples = n(),
+        n_indiv = n_distinct(Individual_ID),
+        median_Gbp = median(total_Gbp, na.rm = TRUE),
+        median_N50 = median(n50, na.rm = TRUE),
+        .groups = "drop"
+    )
+print(platform_summary)
+fwrite(platform_summary, "Tables/QC-platform-summary.tsv", sep = "\t")
+```
+
+# ---------------------------------------------------------------
+# Q4: "*** to both PacBio and ONT sequencing"
+# ---------------------------------------------------------------
+```{r}
+both_platforms <- sample_summary %>%
+    filter(group %in% c("PacBio", "ONT")) %>%
+    distinct(Individual_ID, Platform) %>%
+    count(Individual_ID) %>%
+    filter(n == 2) %>%
+    pull(Individual_ID)
+cat(
+    "Q4 — individuals with both PacBio and ONT:",
+    length(both_platforms), "\n"
+)
+cat("    ", paste(both_platforms, collapse = ", "), "\n")
+```
+
+# ---------------------------------------------------------------
+# Final printout: the four paragraph blanks we can fill from the
+# per-sample QC tables.
+# ---------------------------------------------------------------
+```{r}
+cat("=== PARAGRAPH FILL-IN VALUES ===\n\n")
+cat(sprintf("Q1. Assemblies with Fiber-seq: %d\n", n_indiv))
+for (g in c("PacBio", "ONT", "HG002")) {
+    s <- platform_summary %>% filter(group == g)
+    if (nrow(s) == 0) next
+    cat(sprintf(
+        "Q2/Q3. %s samples: %d (median Gbp = %.1f, N50 = %s bp)\n",
+        g, s$n_samples, s$median_Gbp,
+        scales::comma(round(s$median_N50))
+    ))
+}
+cat(sprintf(
+    "Q4. Both PacBio and ONT: %d  (%s)\n",
+    length(both_platforms),
+    paste(both_platforms, collapse = ", ")
+))
+```
+
+# ---------------------------------------------------------------
+# Q5 (figure): m6A autocorrelation by platform — supports the
+# paragraph's claim that ONT shows reduced footprinting resolution
+# vs PacBio while keeping a similar overall stenciling pattern.
+# ---------------------------------------------------------------
+```{r}
+qc_fire_df %>%
+    filter(Platform %in% c("PacBio", "ONT")) %>%
+    filter(statistic == "m6a_acf") %>%
+    mutate(value = as.numeric(value)) %>%
+    filter(value > 30) %>%
+    ggplot(aes(
+        x = value, y = count,
+        color = Individual_ID, group = uID
+    )) +
+    geom_line(linewidth = 0.3, alpha = 0.85) +
+    scale_x_continuous("Lag between m6A sites (bp)") +
+    scale_y_continuous("m6A autocorrelation") +
+    my_grid() +
+    facet_col(~Platform, scales = "free_y") +
+    theme(legend.position = "none")
+my_ggsave("Figures/m6a_acf_fire.pdf", width = 2.5, height = 2.5)
+```
+
+# ---------------------------------------------------------------
+# Paragraph blanks NOT answered here (data lives in other scripts):
+#   - peaks per haplotype (mean / range):
+#       per-sample FIRE peak BEDs in DSA-FIRE/results/*/*peaks.bed.gz
+#       see Rscripts/all-peaks.Rmd
+#   - consensus pangenome peak count and # samples:
+#       Tables/All-DSG-peaks.tsv.gz; see Rscripts/merged-DSA-peaks.Rmd
+#   - non-GRCh38 peak count and percent:
+#       GRCh38-beds/all-38.bed.gz; see Rscripts/compare-to-38.Rmd
+#   - non-reference peak population frequency / SD enrichment:
+#       same consensus table + annotations
+# ---------------------------------------------------------------
+
+
+# ===============================================================
+# Legacy / unused plots — kept for reference, not required for
+# answering the paragraph blanks above.
+# These all use post-FIRE QC data sourced from Redwood paths.
+# ===============================================================
+
+# legacy: per-sample N50 bar plot
+```{r}
+sample_summary %>%
+    filter(Platform %in% c("PacBio", "ONT")) %>%
+    ggplot(aes(x = fct_reorder(uID, n50), y = n50, fill = Platform)) +
+    geom_col() +
+    scale_y_continuous("N50 (bp)", labels = scales::comma) +
+    scale_x_discrete(labels = function(x) gsub("_.*", "", x)) +
+    xlab("") +
+    my_grid() +
+    scale_fill_manual(values = PLAT_COLORS) +
+    facet_row(~Platform, scales = "free_x", space = "free") +
+    themen(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 4),
+        legend.position = "none",
+    )
+my_ggsave("Figures/QC-n50-per-sample.pdf", width = 3, height = 2)
+```
+
+
+# legacy: per-sample total Gbp bar plot (post-FIRE only)
+```{r}
+sample_summary %>%
+    filter(Platform %in% c("PacBio", "ONT")) %>%
+    ggplot(aes(x = fct_reorder(uID, total_Gbp), y = total_Gbp, fill = Platform)) +
+    geom_col() +
+    scale_y_continuous("Gbp", labels = scales::comma) +
+    scale_x_discrete(labels = function(x) gsub("_.*", "", x)) +
+    xlab("") +
+    my_grid() +
+    scale_fill_manual(values = PLAT_COLORS) +
+    facet_row(~Platform, scales = "free_x", space = "free") +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 4),
+        legend.position = "none",
+    )
+my_ggsave("Figures/QC-phased-bp-per-sample.pdf", width = 3, height = 2)
+```
