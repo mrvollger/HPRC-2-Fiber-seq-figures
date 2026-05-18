@@ -1,6 +1,7 @@
 ---
 params:
   use_test: false
+  use_mini: false
 ---
 
 ```{r setup}
@@ -14,14 +15,23 @@ MIN_FRAC_ACC <- 0.20
 DIFF_THRESHOLD <- 0.25
 MIN_HAP_COV <- 10
 
-# TRUE = load test subset, FALSE = full data
-# When run via pixi: controlled by params$use_test
-# When run interactively: set USE_TEST manually here
+# Modes:
+#   USE_MINI = TRUE: ~30s mini-test (chr16 only, 4 individuals)
+#   USE_TEST = TRUE: ~5min test (4 individuals, all chroms)
+#   Both FALSE: full pipeline
+# When run via pixi: controlled by params$use_test / params$use_mini
+USE_MINI <- if (exists("params") && !is.null(params$use_mini)) params$use_mini else FALSE
 USE_TEST <- if (exists("params") && !is.null(params$use_test)) params$use_test else FALSE
-OUT_PREFIX <- ifelse(USE_TEST, "Tables/test-", "Tables/")
+OUT_PREFIX <- fcase(
+    USE_MINI, "Tables/mini-",
+    USE_TEST, "Tables/test-",
+    default = "Tables/"
+)
 
 UNION_PEAKS_FILE <- "/mmfs1/gscratch/stergachislab/HPRC/fiber-seq-pilot/HLA_graphs/peak_calling_all_chrs/All_HPRC_peaks_NewGraph_w_HG002/All_HPRC_peaks_NewGraph_w_HG002_final_tbl_w_metadata.tsv"
+UNION_PEAKS_FILE <- "/mmfs1/gscratch/stergachislab/HPRC/fiber-seq-pilot/HLA_graphs/peak_calling_all_chrs/All_HPRC_peaks_NewGraph_w_HG002_LengthParam1/All_HPRC_peaks_NewGraph_w_HG002_LengthParam1_final_tbl_w_metadata.tsv"
 TEST_FILE <- "Tables/union-peaks-test-input.tsv.gz"
+MINI_FILE <- "Tables/union-peaks-mini-test-input.tsv.gz"
 ```
 
 # Build test dataset (run once, then use cached file)
@@ -65,7 +75,11 @@ SDs <- bind_rows(
 
 # Load union peaks
 ```{r load-data}
-input_file <- ifelse(USE_TEST, TEST_FILE, UNION_PEAKS_FILE)
+input_file <- fcase(
+    USE_MINI, MINI_FILE,
+    USE_TEST, TEST_FILE,
+    default = UNION_PEAKS_FILE
+)
 cat("Loading:", input_file, "\n")
 
 raw_df <- fread(input_file) %>%
@@ -118,6 +132,7 @@ union_df <- raw_df %>%
         Platform = case_when(
             grepl("_PacBio_", sample_id) ~ "PacBio",
             grepl("_ONT_", sample_id) ~ "ONT",
+            grepl("^HG002_HG002", sample_id) ~ "PacBio",
             TRUE ~ NA_character_
         ),
         PS = ifelse(
@@ -144,12 +159,49 @@ union_df <- raw_df %>%
         ),
         # many-to-one: multiple original asm peaks merged into one consensus peak
         is_complex = num_overlapping_orig_peaks > 1,
+        # which assembly the consensus peak is on
+        cons_assembly = case_when(
+            grepl("^chr[0-9XY]+_MATERNAL", cons_chr) ~ "HG002_1",
+            grepl("^chr[0-9XY]+_PATERNAL", cons_chr) ~ "HG002_2",
+            grepl("^chr[0-9XY]+$", cons_chr) ~ "CHM13",
+            TRUE ~ sub("#[^#]+$", "", cons_chr) %>% sub("#", "_", .)
+        ),
     ) %>%
     data.table()
 
 cat("Merged (many asm -> 1 cons):", sum(union_df$is_complex), "\n")
 
-rm(raw_df, cons_coords, asm_coords)
+# pick primary sample per individual:
+# - For most individuals: PacBio over ONT
+# - For HG002: pick the deep dataset (HG002_HG002, no PS)
+primary_keys <- union_df[, .(
+    mean_cov = mean(coverage, na.rm = TRUE)
+), by = .(Individual_ID, ind_key, Platform, PS)]
+
+# HG002 special case: pick the one without PS (deep PacBio)
+primary_keys[
+    Individual_ID == "HG002",
+    is_primary_sample := is.na(PS)
+]
+
+# everyone else: pick PacBio if available, otherwise the only one
+primary_keys[Individual_ID != "HG002", is_primary_sample := {
+    if (.N == 1) {
+        TRUE
+    } else {
+        Platform == "PacBio"
+    }
+}, by = Individual_ID]
+
+union_df <- merge(
+    union_df,
+    primary_keys[, .(ind_key, is_primary_sample)],
+    by = "ind_key", all.x = TRUE
+)
+cat("Primary samples:\n")
+primary_keys[is_primary_sample == TRUE, .N, by = Platform]
+
+rm(raw_df, cons_coords, asm_coords, primary_keys)
 gc()
 
 glimpse(union_df)
@@ -211,8 +263,12 @@ cat("peak_status:\n")
 hap_wide[, .N, by = peak_status]
 ```
 
-# Sequence comparison between haplotypes
+# Sequence comparison between haplotypes (Biostrings local alignment)
 ```{r seq-comparison}
+library(Biostrings)
+library(future.apply)
+plan(multisession, workers = min(availableCores(), 16))
+
 hap_wide[, `:=`(
     seq_len_1 = nchar(seq_1),
     seq_len_2 = nchar(seq_2)
@@ -222,20 +278,77 @@ hap_wide[, `:=`(
     seq_max_len = pmax(seq_len_1, seq_len_2, na.rm = TRUE)
 )]
 hap_wide[, sufficient_overlap := seq_min_len >= 0.75 * seq_max_len]
-
-# Levenshtein edit distance, adjusted for length difference
-# lv - |len1 - len2| gives substitutions in the best local embedding
 hap_wide[, seq_identical := seq_1 == seq_2]
-hap_wide[
-    seq_identical == FALSE,
-    edit_dist := stringdist::stringdist(seq_1, seq_2, method = "lv")
-]
-hap_wide[seq_identical == TRUE, edit_dist := 0L]
+
+# default values for identical / missing sequences
 hap_wide[, `:=`(
-    local_mismatches = edit_dist - (seq_max_len - seq_min_len),
-    pct_seq_identity = 1 - pmax(edit_dist - (seq_max_len - seq_min_len), 0) / seq_min_len,
-    has_het_variants = !sufficient_overlap | (edit_dist - (seq_max_len - seq_min_len)) > 0
+    local_mismatches = NA_integer_,
+    pct_seq_identity = NA_real_
 )]
+hap_wide[seq_identical == TRUE, `:=`(
+    local_mismatches = 0L,
+    pct_seq_identity = 1.0
+)]
+
+# Run local alignment only on non-identical pairs with both seqs present
+to_align <- hap_wide[
+    seq_identical == FALSE & !is.na(seq_1) & !is.na(seq_2),
+    which = TRUE
+]
+cat("Aligning", length(to_align), "sequence pairs...\n")
+
+if (length(to_align) > 0) {
+    s1 <- DNAStringSet(hap_wide$seq_1[to_align])
+    s2 <- DNAStringSet(hap_wide$seq_2[to_align])
+
+    # batch in chunks for parallel processing and progress
+    chunk_size <- 50000
+    n_chunks <- ceiling(length(to_align) / chunk_size)
+    cat("Processing in", n_chunks, "chunks of", chunk_size, "\n")
+
+    aln_results <- future_lapply(seq_len(n_chunks), function(i) {
+        idx <- ((i - 1) * chunk_size + 1):min(i * chunk_size, length(to_align))
+        # try forward and reverse complement, take the better alignment
+        aln_fwd <- pairwiseAlignment(s1[idx], s2[idx], type = "local")
+        aln_rev <- pairwiseAlignment(
+            s1[idx], reverseComplement(s2[idx]),
+            type = "local"
+        )
+        use_rev <- score(aln_rev) > score(aln_fwd)
+        nmis <- ifelse(use_rev, nmismatch(aln_rev), nmismatch(aln_fwd))
+        pid_v <- ifelse(use_rev, pid(aln_rev), pid(aln_fwd))
+        nmat <- ifelse(use_rev, nmatch(aln_rev), nmatch(aln_fwd))
+        wd <- ifelse(use_rev, width(pattern(aln_rev)), width(pattern(aln_fwd)))
+        list(
+            nmismatch = nmis,
+            pid = pid_v / 100,
+            nmatch = nmat,
+            width = wd,
+            is_rev = use_rev
+        )
+    })
+
+    nmis <- unlist(lapply(aln_results, `[[`, "nmismatch"))
+    pid_v <- unlist(lapply(aln_results, `[[`, "pid"))
+    nmatch_v <- unlist(lapply(aln_results, `[[`, "nmatch"))
+    aln_w <- unlist(lapply(aln_results, `[[`, "width"))
+
+    hap_wide[to_align, `:=`(
+        local_mismatches = nmis,
+        pct_seq_identity = pid_v,
+        aln_match = nmatch_v,
+        aln_width = aln_w
+    )]
+
+    rm(s1, s2, aln_results, nmis, pid_v, nmatch_v, aln_w)
+    gc()
+}
+
+# has_het_variants: insufficient overlap OR alignment found mismatches
+hap_wide[, has_het_variants := !sufficient_overlap |
+    (!is.na(local_mismatches) & local_mismatches > 0)]
+
+plan(sequential)
 
 cat(
     "Het variant rate:",
@@ -302,23 +415,52 @@ hap_wide[, .N, by = haplotype_distinct]
 
 # Merge haplotype classification back to long format
 ```{r hap-merge-back}
+# Extract test results (only populated for peaks that pass filters)
 hap_class <- hap_wide[, .(
     ind_key, consensus_peak_id, haplotype_distinct, diff,
     has_het_variants, local_mismatches, pct_seq_identity,
-    fisher_p,
-    fire_coverage_1, fire_coverage_2, coverage_1, coverage_2
+    fisher_p
 )]
 rm(hap_wide)
 gc()
+
+# Compute raw coverage columns via self-join on ALL rows (not just peaks)
+# These should always be populated when both haplotypes exist
+cov_h1 <- union_df[
+    Haplotype == "1",
+    .(ind_key, consensus_peak_id,
+        coverage_1 = coverage, fire_coverage_1 = fire_coverage
+    )
+]
+cov_h2 <- union_df[
+    Haplotype == "2",
+    .(ind_key, consensus_peak_id,
+        coverage_2 = coverage, fire_coverage_2 = fire_coverage
+    )
+]
+
+# NA means no row for that haplotype (not measured / not applicable)
+# 0 means measured with zero reads (preserved from original data)
+raw_cov <- merge(cov_h1, cov_h2,
+    by = c("ind_key", "consensus_peak_id"), all = TRUE
+)
+rm(cov_h1, cov_h2)
 
 union_hap_df <- merge(
     union_df, hap_class,
     by = c("ind_key", "consensus_peak_id"),
     all.x = TRUE
 )
+union_hap_df <- merge(
+    union_hap_df, raw_cov,
+    by = c("ind_key", "consensus_peak_id"),
+    all.x = TRUE
+)
 cat("Rows with haplotype class:", sum(!is.na(union_hap_df$haplotype_distinct)), "\n")
+cat("Rows with coverage_1:", sum(!is.na(union_hap_df$coverage_1)), "\n")
+cat("Rows with coverage_2:", sum(!is.na(union_hap_df$coverage_2)), "\n")
 
-rm(union_df, hap_class)
+rm(union_df, hap_class, raw_cov)
 gc()
 ```
 
@@ -462,24 +604,26 @@ Each row represents a called peak in a specific sample/haplotype.
 | 25 | is_peak | Whether this site passes peak thresholds (fire_coverage >= {MIN_FIRE_COV} AND fire_cov_OV_cov >= {MIN_FRAC_ACC}) |
 | 26 | Individual_ID | Individual identifier (e.g. HG00438), parsed from sample_id |
 | 27 | Haplotype | Haplotype number (1 or 2), parsed from sample_id |
-| 28 | Platform | Sequencing platform (PacBio, ONT, or NA for HG002) |
+| 28 | Platform | Sequencing platform (PacBio or ONT; HG002_HG002 samples are PacBio) |
 | 29 | PS | Sample preparation identifier, parsed from sample_id (NA for HG002) |
 | 30 | is_SD_cons | Whether the consensus coordinates overlap a segmental duplication |
 | 31 | is_SD_asm | Whether the assembly coordinates overlap a segmental duplication |
 | 32 | is_SD | Whether either coordinate set overlaps a segmental duplication |
 | 33 | chrom_hg38 | hg38 chromosome name for the assembly contig (from chromosome alias table) |
 | 34 | autosome | "Autosomes" or "Sex chromosome", based on chrom_hg38/asm_chr |
-| 35 | is_complex | Whether multiple original assembly peaks were merged into this consensus peak (num_overlapping_orig_peaks > 1) |
-| 36 | haplotype_distinct | Haplotype classification (see below) |
-| 37 | diff | Accessibility difference between haplotypes (fire_cov_OV_cov H1 - H2) |
-| 38 | has_het_variants | Whether the peak sequences differ between haplotypes (logical) |
-| 39 | local_mismatches | Number of substitutions in best local alignment of haplotype sequences |
-| 40 | pct_seq_identity | Percent sequence identity between haplotype sequences (0-1) |
-| 41 | fisher_p | Fisher exact test p-value for accessibility difference between haplotypes |
-| 42 | fire_coverage_1 | FIRE coverage on haplotype 1 for this individual |
-| 43 | fire_coverage_2 | FIRE coverage on haplotype 2 for this individual |
-| 44 | coverage_1 | Total coverage on haplotype 1 for this individual |
-| 45 | coverage_2 | Total coverage on haplotype 2 for this individual |
+| 35 | is_complex | Multiple original asm peaks merged into this consensus peak |
+| 36 | cons_assembly | Assembly of consensus peak (e.g. HG00438_1, HG002_1, HG002_2, CHM13) |
+| 37 | haplotype_distinct | Haplotype classification (see below) |
+| 38 | diff | Accessibility difference between haplotypes (fire_cov_OV_cov H1 - H2) |
+| 39 | has_het_variants | Whether the peak sequences differ between haplotypes (logical) |
+| 40 | local_mismatches | Number of substitutions in best local alignment of haplotype sequences |
+| 41 | pct_seq_identity | Percent sequence identity between haplotype sequences (0-1) |
+| 42 | fisher_p | Fisher exact test p-value for accessibility difference between haplotypes |
+| 43 | fire_coverage_1 | FIRE coverage on haplotype 1 for this individual |
+| 44 | fire_coverage_2 | FIRE coverage on haplotype 2 for this individual |
+| 45 | coverage_1 | Total coverage on haplotype 1 for this individual |
+| 46 | coverage_2 | Total coverage on haplotype 2 for this individual |
+| 47 | is_primary_sample | Whether this is the preferred sample for this individual (PacBio > ONT; deep HG002 > shallow) |
 
 ### haplotype_distinct categories
 - **chrX**: Peak on chrX (excluded from autosomal haplotype analysis)
