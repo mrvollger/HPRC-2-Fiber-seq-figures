@@ -1,0 +1,327 @@
+```{r setup}
+source("Rscripts/utils.R")
+```
+
+# Load data
+```{r load-data}
+revived_genes <- fread("../pseduo-genes/pseudogene_with_strand.tsv",
+    col.names = c("sample_hap", "contig", "start", "end", "gene_name", "strand")
+)
+dead_genes <- fread("../pseduo-genes/real_pseudogene_with_strand.tsv",
+    col.names = c("sample_hap", "contig", "start", "end", "gene_name", "strand")
+)
+positive_control_genes <- fread("../pseduo-genes/protein_coding_strand.txt.gz",
+    col.names = c("sample_hap", "contig", "start", "end", "strand")
+)
+# protein-coding file has no gene_name column; add placeholder so the
+# downstream pipeline (which carries gene_name through) keeps working.
+positive_control_genes[, gene_name := NA_character_]
+
+peaks <- my_read_bed(cmd = "bgzip -dc -@ 8 Tables/peaks-asm.bed.gz", sort = FALSE)
+all_sites <- my_read_bed(cmd = "bgzip -dc -@ 8 Tables/union-peaks-asm.bed.gz", sort = FALSE)
+
+# parse sample_hap and build asm_chr-compatible contig name
+parse_genes <- function(dt) {
+    dt[, `:=`(
+        Individual_ID = sub("_h[12]$", "", sample_hap),
+        Haplotype = sub(".*_h", "", sample_hap),
+        # match peaks asm_chr format: ID#hap#contig
+        asm_chr = paste0(
+            sub("_h[12]$", "", sample_hap), "#",
+            sub(".*_h", "", sample_hap), "#",
+            contig
+        )
+    )]
+}
+parse_genes(revived_genes)
+parse_genes(dead_genes)
+parse_genes(positive_control_genes)
+
+cat("Revived genes:", nrow(revived_genes), "across", uniqueN(revived_genes$gene_name), "genes\n")
+cat("Dead genes:", nrow(dead_genes), "across", uniqueN(dead_genes$gene_name), "genes\n")
+cat("Positive control (protein-coding) loci:", nrow(positive_control_genes), "\n")
+```
+
+# Filter to samples with fiber-seq data
+```{r filter-samples}
+fiber_samples <- peaks[, unique(Individual_ID)]
+cat("Fiber-seq individuals:", length(fiber_samples), "\n")
+
+revived_fiber <- revived_genes[Individual_ID %in% fiber_samples]
+dead_fiber <- dead_genes[Individual_ID %in% fiber_samples]
+positive_fiber <- positive_control_genes[Individual_ID %in% fiber_samples]
+
+length(unique(revived_fiber$Individual_ID))
+
+cat(
+    "Revived genes in fiber-seq samples:", nrow(revived_fiber),
+    "across", uniqueN(revived_fiber$gene_name), "genes\n"
+)
+cat(
+    "Dead genes in fiber-seq samples:", nrow(dead_fiber),
+    "across", uniqueN(dead_fiber$gene_name), "genes\n"
+)
+cat(
+    "Positive control loci in fiber-seq samples:", nrow(positive_fiber), "\n"
+)
+```
+
+# Intersect gene promoters with peaks
+```{r intersect-peaks}
+# TSS +/- 500bp based on strand
+FLANK <- 500
+
+make_regions <- function(dt) {
+    dt[, .(
+        chrom = asm_chr,
+        full_start = pmax(start - FLANK, 0L),
+        full_end = end + FLANK,
+        start = pmax(fifelse(strand == "+", start - FLANK, end - FLANK), 0L),
+        end = fifelse(strand == "+", start + FLANK, end + FLANK),
+        gene_name, Individual_ID, Haplotype, sample_hap, strand
+    )]
+}
+
+revived_regions <- make_regions(revived_fiber)
+dead_regions <- make_regions(dead_fiber)
+positive_regions <- make_regions(positive_fiber)
+
+peaks_bed <- peaks[, .(chrom, start, end, fire_cov_OV_cov)]
+all_bed <- all_sites[, .(chrom, start, end, fire_cov_OV_cov)]
+
+hits_for <- function(regions) {
+    h <- bed_map(regions, peaks_bed,
+        n_peaks = n(),
+        max_peak_acc = ifelse(n() == 0, NA_real_, max(fire_cov_OV_cov, na.rm = TRUE))
+    ) %>%
+        replace_na(list(n_peaks = 0L)) %>%
+        data.table()
+    h[, max_acc := bed_map(
+        regions, all_bed,
+        max_acc = ifelse(n() == 0, NA_real_, max(fire_cov_OV_cov, na.rm = TRUE))
+    )$max_acc]
+    h
+}
+
+revived_hits <- hits_for(revived_regions)
+dead_hits <- hits_for(dead_regions)
+positive_hits <- hits_for(positive_regions)
+
+cat("Revived with peaks:", sum(revived_hits$n_peaks > 0), "/", nrow(revived_hits), "\n")
+cat("Dead with peaks:", sum(dead_hits$n_peaks > 0), "/", nrow(dead_hits), "\n")
+cat("Positive control with peaks:", sum(positive_hits$n_peaks > 0), "/", nrow(positive_hits), "\n")
+```
+
+# Compare peak rates
+```{r compare-peak-rates}
+# subsample dead and positive-control loci to match revived count
+set.seed(42)
+n_revived <- nrow(revived_hits)
+dead_hits_sub <- dead_hits[sample(.N, min(.N, n_revived))]
+positive_hits_sub <- positive_hits[sample(.N, min(.N, n_revived))]
+cat(
+    "Subsampled dead loci:", nrow(dead_hits_sub),
+    " positive-control loci:", nrow(positive_hits_sub),
+    " to match", n_revived, "revived\n"
+)
+
+# fixed ordering: dead -> revived -> positive control (low -> high accessibility)
+type_levels <- c("Dead pseudogene", "Revived pseudogene", "Protein-coding")
+
+comparison <- rbind(
+    revived_hits[, .(type = "Revived pseudogene", has_peak = n_peaks > 0, max_acc)],
+    dead_hits_sub[, .(type = "Dead pseudogene", has_peak = n_peaks > 0, max_acc)],
+    positive_hits_sub[, .(type = "Protein-coding", has_peak = n_peaks > 0, max_acc)]
+)
+comparison[, type := factor(type, levels = type_levels)]
+
+print(comparison[, .(
+    n = .N,
+    n_with_peak = sum(has_peak),
+    frac_with_peak = mean(has_peak)
+), by = type])
+
+# Fisher's test: enrichment of peaks in revived vs dead (kept as the primary contrast)
+contingency <- matrix(c(
+    sum(revived_hits$n_peaks > 0),
+    sum(revived_hits$n_peaks == 0),
+    sum(dead_hits_sub$n_peaks > 0),
+    sum(dead_hits_sub$n_peaks == 0)
+), nrow = 2, dimnames = list(
+    c("With peak", "No peak"),
+    c("Revived", "Dead")
+))
+cat("Contingency table (Revived vs Dead):\n")
+print(contingency)
+
+ft <- fisher.test(contingency)
+cat("\nFisher's exact test (Revived vs Dead):\n")
+cat("  Odds ratio:", round(ft$estimate, 2), "\n")
+cat("  p-value:", ft$p.value, "\n")
+cat("  95% CI:", round(ft$conf.int, 2), "\n")
+
+# All pairwise Fisher tests for the enrichment plot brackets.
+# fisher.test OR = odds(yes|col1) / odds(yes|col2), so the FIRST argument is
+# the numerator. Convention here: more-active class first, so OR > 1 always
+# means "the more-active class is enriched for peaks vs the reference".
+peak_counts <- list(
+    "Dead pseudogene"    = c(yes = sum(dead_hits_sub$n_peaks > 0), no = sum(dead_hits_sub$n_peaks == 0)),
+    "Revived pseudogene" = c(yes = sum(revived_hits$n_peaks > 0), no = sum(revived_hits$n_peaks == 0)),
+    "Protein-coding"     = c(yes = sum(positive_hits_sub$n_peaks > 0), no = sum(positive_hits_sub$n_peaks == 0))
+)
+fisher_pair <- function(numerator, denominator) {
+    m <- matrix(c(peak_counts[[numerator]], peak_counts[[denominator]]),
+        nrow = 2,
+        dimnames = list(c("With peak", "No peak"), c(numerator, denominator))
+    )
+    fisher.test(m)
+}
+
+# numerator first: more-accessible class on the left
+ft_rd <- fisher_pair("Revived pseudogene", "Dead pseudogene")
+ft_pr <- fisher_pair("Protein-coding", "Revived pseudogene")
+ft_pd <- fisher_pair("Protein-coding", "Dead pseudogene")
+
+pair_labels <- c(
+    ft_rd = "Revived vs Dead",
+    ft_pr = "Protein-coding vs Revived",
+    ft_pd = "Protein-coding vs Dead"
+)
+for (nm in names(pair_labels)) {
+    f <- get(nm)
+    cat("\nFisher's exact test (", pair_labels[[nm]], "):\n", sep = "")
+    cat("  Odds ratio:", round(f$estimate, 2), "\n")
+    cat("  p-value:", signif(f$p.value, 3), "\n")
+}
+
+p_bar <- comparison %>%
+    ggplot(aes(x = type, fill = has_peak)) +
+    geom_bar(position = "fill") +
+    scale_y_continuous(
+        "Fraction of promoters with Fiber-seq",
+        labels = percent
+    ) +
+    scale_fill_manual("",
+        values = c("TRUE" = "steelblue", "FALSE" = "grey80"),
+        labels = c("TRUE" = "Peak nearby", "FALSE" = "No peak")
+    ) +
+    xlab("") +
+    my_grid() +
+    theme(legend.position = "top")
+my_ggsave("Figures/pseduo-genes-peak-rate.pdf", plot = p_bar, width = 3, height = 2)
+```
+
+# Accessibility distributions (all genes, no peak = 0)
+```{r accessibility}
+comparison[, acc_plot := fifelse(is.na(max_acc), 0, max_acc)]
+
+p_acc <- comparison %>%
+    ggplot(aes(x = acc_plot, color = type)) +
+    stat_bin(geom = "step", binwidth = 0.03, position = "identity") +
+    scale_x_continuous(
+        "% Fiber-seq actuation near gene",
+        labels = percent
+    ) +
+    scale_y_continuous("# of genes") +
+    scale_color_brewer("", palette = "Set1") +
+    facet_zoom(
+        xlim = c(0.2, 1),
+        ylim = c(0, 500),
+        zoom.size = 2,
+        horizontal = FALSE
+    ) +
+    theme_cowplot(
+        font_size = 6,
+    ) +
+    theme(
+        legend.position = "top"
+    )
+my_ggsave("Figures/pseduo-genes-accessibility.pdf", plot = p_acc, width = 3, height = 3)
+```
+
+# Combined figure
+```{r combined-figure}
+p_bar + p_acc + plot_layout(design = "ABB") +
+    plot_annotation(tag_levels = "A")
+my_ggsave("Figures/pseduo-genes-combined.pdf", width = 5, height = 3)
+```
+
+**Figure legend.** Pseudogenes and a protein-coding positive control identified across HPRC assemblies were intersected with fiber-seq accessibility peaks from 78 haplotype samples. **(A)** Fraction of revived pseudogene, dead pseudogene, and protein-coding loci (gene body +/- 500bp) overlapping at least one accessibility peak. **(B)** Distribution of maximum accessibility observed near each locus; bottom panel zooms into the 20-100% range.
+
+
+# Alternate combined: enrichment bar + high-accessibility distribution
+```{r alt-combined}
+# semantic palette: revived = the biological finding (red), controls muted.
+# Dead = negative control (neutral gray), Protein-coding = positive control
+# (blue-gray — distinct from dead but still de-emphasized vs. revived).
+pseudo_colors <- c(
+    "Dead pseudogene"    = "#9E9E9E", # neutral gray (negative control)
+    "Revived pseudogene" = "#C0392B", # red (finding)
+    "Protein-coding"     = "#5B7C99" # slate blue-gray (positive control)
+)
+
+# enrichment bar chart with odds ratio annotation
+peak_rates <- comparison[, .(
+    frac = mean(has_peak)
+), by = type]
+
+bracket_label <- function(f, num_short, denom_short) {
+    paste0("OR=", round(f$estimate, 2), ", p=", signif(f$p.value, 3))
+}
+y_max <- max(peak_rates$frac)
+
+p_enrich <- peak_rates %>%
+    ggplot(aes(x = type, y = frac)) +
+    geom_bar(aes(fill = type), stat = "identity", width = 0.6) +
+    geom_text(aes(label = paste0(round(100 * frac, 1), "%")),
+        hjust = -0.3, size = 2.5
+    ) +
+    # adjacent pairs first, then the outermost (Dead vs Protein-coding) on top
+    geom_bracket(
+        xmin = "Dead pseudogene", xmax = "Revived pseudogene",
+        y.position = y_max * 1.25,
+        label = bracket_label(ft_rd, "Revived", "Dead"),
+        label.size = 2, tip.length = 0.04, coord.flip = TRUE
+    ) +
+    geom_bracket(
+        xmin = "Revived pseudogene", xmax = "Protein-coding",
+        y.position = y_max * 1.45,
+        label = bracket_label(ft_pr, "PC", "Revived"),
+        label.size = 2, tip.length = 0.04, coord.flip = TRUE
+    ) +
+    geom_bracket(
+        xmin = "Dead pseudogene", xmax = "Protein-coding",
+        y.position = y_max * 1.65,
+        label = bracket_label(ft_pd, "PC", "Dead"),
+        label.size = 2, tip.length = 0.04, coord.flip = TRUE
+    ) +
+    scale_y_continuous("% of TSSs with a Fiber-seq peak",
+        labels = percent, expand = expansion(mult = c(0, 0.2))
+    ) +
+    scale_fill_manual("", values = pseudo_colors) +
+    xlab("") +
+    coord_flip() +
+    my_grid() +
+    theme(legend.position = "none")
+
+# high-accessibility distribution (>= 50%)
+lower_limit <- 0.4
+p_high_acc <- comparison[!is.na(acc_plot) & acc_plot >= lower_limit] %>%
+    ggplot(aes(x = acc_plot, color = type)) +
+    stat_bin(geom = "step", binwidth = 0.05, position = "identity") +
+    scale_x_continuous("% Fiber-seq actuation",
+        labels = percent, limits = c(lower_limit, 1)
+    ) +
+    scale_y_continuous("# of genes") +
+    scale_color_manual("", values = pseudo_colors) +
+    my_grid() +
+    theme(legend.position = "top")
+
+p_enrich + p_high_acc +
+    plot_layout(design = "
+    AB") +
+    plot_annotation(tag_levels = "A")
+my_ggsave("Figures/pseduo-genes-alt-combined.pdf", width = 6, height = 2)
+```
+
+**Figure legend.** Accessibility at gene promoters (TSS +/- 500bp) in HPRC Fiber-seq data across three classes: dead pseudogenes (negative control), revived pseudogenes, and protein-coding genes (positive control). **(A)** Fraction of loci in each class with at least one accessibility peak at the TSS. Brackets give Fisher's exact test odds ratios and p-values for all three pairwise contrasts. Dead and protein-coding loci were subsampled to match the number of revived pseudogenes. **(B)** Distribution of maximum fiber-seq actuation for loci with >= 40% accessibility.

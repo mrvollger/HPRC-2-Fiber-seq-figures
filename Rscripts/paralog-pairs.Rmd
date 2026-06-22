@@ -1,0 +1,203 @@
+```{r setup}
+source("Rscripts/utils.R")
+```
+
+# Load paralog pairs
+```{r load-data}
+pairs <- fread(cmd = "bgzip -cd -@ 16 paralog_pairs_enriched.tsv.gz")
+cat("Paralog pairs:", nrow(pairs), "\n")
+cat("Unique paralog groups:", uniqueN(pairs$paralog_group_id_query), "\n")
+cat("Unique samples:", uniqueN(pairs$paralog1_sample_id), "\n")
+glimpse(pairs)
+# table(pairs$paralog1_sample_id, pairs$paralog2_sample_id)
+```
+
+
+# Get allelic pairs: extract each paralog as its own row, keeping both hap stats
+```{r allelic-pairs}
+extract_paralog <- function(dt, paralog = "paralog1") {
+    p <- paralog
+    dt[, .(
+        consensus_peak_id = get(paste0(p, "_consensus_peak_id")),
+        sample_id = get(paste0(p, "_sample_id")),
+        haplotype_sample = get(paste0(p, "_haplotype_sample")),
+        fire_coverage_1 = get(paste0(p, "_fire_coverage_1")),
+        fire_coverage_2 = get(paste0(p, "_fire_coverage_2")),
+        coverage_1 = get(paste0(p, "_coverage_1")),
+        coverage_2 = get(paste0(p, "_coverage_2")),
+        acc_1 = fifelse(
+            get(paste0(p, "_coverage_1")) > 0,
+            get(paste0(p, "_fire_coverage_1")) / get(paste0(p, "_coverage_1")),
+            NA_real_
+        ),
+        acc_2 = fifelse(
+            get(paste0(p, "_coverage_2")) > 0,
+            get(paste0(p, "_fire_coverage_2")) / get(paste0(p, "_coverage_2")),
+            NA_real_
+        ),
+        fire_ratio = get(paste0(p, "_fire_ratio")),
+        is_peak = get(paste0(p, "_is_peak")),
+        is_SD = get(paste0(p, "_is_SD")),
+        haplotype_distinct = get(paste0(p, "_haplotype_distinct")),
+        paralog = paralog,
+        paralog_group = paralog_group_id_query,
+        lifted_blast_identity,
+        delta_fire_ratio,
+        qc_clean
+    )]
+}
+
+allelic_pairs <- rbind(
+    extract_paralog(pairs, "paralog1"),
+    extract_paralog(pairs, "paralog2")
+)
+
+cat("Allelic rows:", nrow(allelic_pairs), "\n")
+cat("(should be ~2x original:", nrow(pairs), "* 2 =", nrow(pairs) * 2, ")\n")
+allelic_pairs <- allelic_pairs %>%
+    filter(
+        !is.na(fire_coverage_1),
+        !is.na(fire_coverage_2),
+        !is.na(coverage_1),
+        !is.na(coverage_2)
+    )
+```
+
+# QC: coverage and peak stats
+```{r qc-stats}
+cat("Both are peaks:", sum(pairs$paralog1_is_peak & pairs$paralog2_is_peak, na.rm = TRUE), "\n")
+cat("One is peak:", sum(xor(pairs$paralog1_is_peak, pairs$paralog2_is_peak), na.rm = TRUE), "\n")
+cat("Neither is peak:", sum(!pairs$paralog1_is_peak & !pairs$paralog2_is_peak, na.rm = TRUE), "\n")
+
+cat("\nBoth in SD:", sum(pairs$paralog1_is_SD & pairs$paralog2_is_SD, na.rm = TRUE), "\n")
+cat("QC clean:", sum(pairs$qc_clean, na.rm = TRUE), "\n")
+```
+
+# Filter to QC-clean pairs
+```{r filter}
+clean_pairs <- pairs[qc_clean == TRUE]
+cat("QC-clean pairs:", nrow(clean_pairs), "\n")
+```
+
+# Sequence identity between paralogs
+```{r seq-identity}
+clean_pairs %>%
+    ggplot(aes(x = lifted_blast_identity)) +
+    stat_bin(geom = "step", binwidth = 0.005, position = "identity") +
+    scale_x_continuous("BLAST identity between paralog pair",
+        labels = percent, limits = c(0.8, 1)
+    ) +
+    scale_y_continuous("# of paralog pairs", labels = comma) +
+    my_grid()
+my_ggsave("Figures/paralog-pairs-identity.pdf", width = 3, height = 2)
+```
+
+# Delta fire ratio: accessibility difference between paralogs
+```{r delta-fire-ratio}
+# take all the alleles for all the cons IDs in a paralog group
+# then look at the distribution of FIRE scores
+# compare that to the distribution of paralog FIRE scores
+# can we use sequence to explain why the paralogs are more differentially accesible than the alleles?
+mean(allelic_pairs$coverage_1)
+mean(clean_pairs$paralog1_coverage, na.rm = TRUE)
+allelic_pairs %>%
+    mutate(
+        type = "allelic",
+        delta_fire_ratio = fire_coverage_1 / coverage_1 - fire_coverage_2 / coverage_2
+    ) %>%
+    select(type, delta_fire_ratio) %>%
+    bind_rows(
+        clean_pairs %>%
+            mutate(
+                delta_fire_ratio = paralog1_fire_coverage / paralog1_coverage - paralog2_fire_coverage / paralog2_coverage,
+                # testable = paralog1_fire_coverage + paralog2_fire_coverage > 5,
+                type = "paralog"
+            ) %>%
+            filter(
+                # testable,
+                !is.na(paralog1_coverage),
+                !is.na(paralog2_coverage),
+            ) %>%
+            select(type, delta_fire_ratio)
+    ) %>%
+    ggplot(aes(x = delta_fire_ratio, color = type)) +
+    stat_bin(
+        aes(y = after_stat(density)),
+        geom = "step",
+        binwidth = 0.02, position = "identity"
+    ) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    scale_x_continuous("Accessibility difference between paralogs",
+        limits = c(-1, 1)
+    ) +
+    scale_y_continuous("# of paralog pairs", labels = comma) +
+    my_grid()
+my_ggsave("Figures/paralog-pairs-delta-fire.pdf", width = 3, height = 2)
+```
+
+# Accessibility of paralog1 vs paralog2
+```{r paralog-scatter}
+clean_pairs %>%
+    ggplot(aes(x = paralog1_fire_ratio, y = paralog2_fire_ratio)) +
+    geom_hex(bins = 50) +
+    scale_fill_distiller("", palette = "Spectral", trans = "log10") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    scale_x_continuous("Paralog 1 accessibility", labels = percent) +
+    scale_y_continuous("Paralog 2 accessibility", labels = percent) +
+    coord_equal() +
+    my_grid()
+my_ggsave("Figures/paralog-pairs-scatter.pdf", width = 3, height = 3)
+```
+
+# Identity vs accessibility difference
+```{r identity-vs-delta}
+clean_pairs %>%
+    ggplot(aes(x = lifted_blast_identity, y = abs(delta_fire_ratio))) +
+    geom_hex(bins = 50) +
+    scale_fill_distiller("", palette = "Spectral", trans = "log10") +
+    scale_x_continuous("Sequence identity between paralogs", labels = percent) +
+    scale_y_continuous("| Accessibility difference |", labels = percent) +
+    my_grid()
+my_ggsave("Figures/paralog-pairs-identity-vs-delta.pdf", width = 3, height = 2)
+```
+
+# Pairs where one is a peak and the other is not
+```{r discordant-peaks}
+clean_pairs[, discordant := xor(
+    paralog1_is_peak == TRUE,
+    paralog2_is_peak == TRUE
+)]
+
+cat("Discordant pairs (one peak, one not):", sum(clean_pairs$discordant), "\n")
+cat("Fraction discordant:", round(mean(clean_pairs$discordant) * 100, 1), "%\n")
+
+clean_pairs %>%
+    ggplot(aes(x = discordant, y = abs(delta_fire_ratio))) +
+    geom_violin(fill = "grey90") +
+    geom_quasirandom(method = "pseudorandom", size = 0.2, alpha = 0.1) +
+    scale_y_continuous("| Accessibility difference |", labels = percent) +
+    scale_x_discrete("", labels = c("TRUE" = "Discordant", "FALSE" = "Concordant")) +
+    my_grid()
+my_ggsave("Figures/paralog-pairs-discordant.pdf", width = 2, height = 2)
+```
+
+# Per paralog group summary
+```{r per-group}
+group_summary <- clean_pairs[, .(
+    n_pairs = .N,
+    n_samples = uniqueN(paralog1_haplotype_sample),
+    mean_identity = mean(lifted_blast_identity, na.rm = TRUE),
+    mean_delta = mean(abs(delta_fire_ratio), na.rm = TRUE),
+    frac_discordant = mean(discordant)
+), by = paralog_group_id_query]
+
+group_summary %>%
+    ggplot(aes(x = mean_identity, y = mean_delta)) +
+    geom_point(aes(size = n_samples), alpha = 0.5) +
+    scale_x_continuous("Mean sequence identity", labels = percent) +
+    scale_y_continuous("Mean | accessibility difference |", labels = percent) +
+    scale_size_continuous("# samples") +
+    my_grid() +
+    theme(legend.position = "right")
+my_ggsave("Figures/paralog-pairs-group-summary.pdf", width = 3, height = 2.5)
+```

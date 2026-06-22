@@ -1,0 +1,194 @@
+```{r setup}
+source("Rscripts/utils.R")
+# Column definitions: see Tables/union-peaks-README.md
+```
+
+# Load peaks
+```{r load-data}
+hap_sel <- my_read_bed(cmd = "bgzip -dc -@ 8 Tables/union-peaks-cons.bed.gz", sort = FALSE) %>%
+    filter(
+        haplotype_distinct == "Haplotype-selective",
+        is_primary_sample == TRUE,
+    ) %>%
+    data.table()
+```
+
+# Extract haplotype-selective peaks in wide format
+```{r hap-selective-wide}
+cat("Haplotype-selective peak rows:", nrow(hap_sel), "\n")
+
+# pivot seq into wide by haplotype, merge with shared columns
+merge_cols <- c("ind_key", "consensus_peak_id")
+h1 <- hap_sel[Haplotype == "1", c(merge_cols, "seq"), with = FALSE]
+h2 <- hap_sel[Haplotype == "2", c(merge_cols, "seq"), with = FALSE]
+setnames(h1, "seq", "seq_1")
+setnames(h2, "seq", "seq_2")
+
+# take one row per peak for the shared columns, then join seqs
+hap_sel_wide <- hap_sel[, .SD[1], by = .(ind_key, consensus_peak_id)] %>%
+    merge(h1, by = merge_cols, all.x = TRUE) %>%
+    merge(h2, by = merge_cols, all.x = TRUE) %>%
+    select(
+        -coverage, -fire_coverage, -score, -fire_cov_OV_cov,
+        -Haplotype, -seq,
+        -asm, -asm_chr, -asm_start, -asm_end, -asm_peak_id,
+        -sample_id_peak_id_TEMP_COL,
+        -is_SD_cons, -is_SD_asm,
+        -num_overlapping_orig_peaks, -orig_peaks_overlapping_consensus
+    ) %>%
+    data.table()
+
+# compute per-haplotype accessibility
+hap_sel_wide[, `:=`(
+    acc_1 = fire_coverage_1 / coverage_1,
+    acc_2 = fire_coverage_2 / coverage_2,
+    diff = fire_coverage_1 / coverage_1 - fire_coverage_2 / coverage_2
+)]
+
+# add sharing count
+sharing <- hap_sel_wide[, .(
+    n_ind_hap_sel = uniqueN(Individual_ID)
+), by = consensus_peak_id]
+hap_sel_wide <- merge(hap_sel_wide, sharing, by = "consensus_peak_id")
+
+cat("Unique hap-selective peaks:", nrow(hap_sel_wide), "\n")
+glimpse(hap_sel_wide)
+```
+
+# Summary
+```{r summary}
+hap_sel_wide[, .(
+    n = .N,
+    median_acc_1 = median(acc_1, na.rm = TRUE),
+    median_acc_2 = median(acc_2, na.rm = TRUE),
+    median_diff = median(abs(diff), na.rm = TRUE),
+    median_mismatches = as.double(median(local_mismatches, na.rm = TRUE)),
+    frac_SD = mean(is_SD, na.rm = TRUE)
+), by = .(Individual_ID, Platform)]
+```
+
+# H1 vs H2 accessibility scatter
+```{r hap-sel-scatter}
+hap_sel_wide[!is.na(acc_1) & !is.na(acc_2)] %>%
+    ggplot(aes(x = acc_1, y = acc_2)) +
+    geom_hex(bins = 30) +
+    scale_fill_distiller("", palette = "Spectral", trans = "log10") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    scale_x_continuous("H1 accessibility", labels = percent, limits = c(0, 1)) +
+    scale_y_continuous("H2 accessibility", labels = percent, limits = c(0, 1)) +
+    coord_equal() +
+    my_grid()
+my_ggsave("Figures/hap-selective-peaks-scatter.pdf", width = 3, height = 3)
+```
+
+# Accessibility difference distribution
+```{r hap-sel-diff}
+hap_sel_wide %>%
+    ggplot(aes(x = diff)) +
+    stat_bin(geom = "step", binwidth = 0.02, position = "identity") +
+    geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "red") +
+    scale_x_continuous("Accessibility difference (H1 - H2)", limits = c(-1, 1)) +
+    scale_y_continuous("# of peaks") +
+    my_grid()
+my_ggsave("Figures/hap-selective-peaks-diff.pdf", width = 3, height = 2)
+```
+
+# Sequence mismatches vs accessibility difference
+```{r hap-sel-mismatches}
+hap_sel_wide[!is.na(local_mismatches)] %>%
+    ggplot(aes(x = local_mismatches, y = abs(diff))) +
+    geom_hex(bins = 30) +
+    scale_fill_distiller("", palette = "Spectral", trans = "log10") +
+    scale_x_continuous("# sequence mismatches between haplotypes") +
+    scale_y_continuous("| Accessibility difference |", labels = percent) +
+    my_grid()
+my_ggsave("Figures/hap-selective-peaks-mismatches.pdf", width = 3, height = 2)
+```
+
+# Sharing: how many individuals are haplotype-selective at each peak
+```{r hap-sel-sharing}
+sharing %>%
+    rename(n_individuals = n_ind_hap_sel) %>%
+    ggplot(aes(x = n_individuals)) +
+    stat_bin(geom = "step", binwidth = 1, position = "identity") +
+    scale_x_continuous("# individuals haplotype-selective at peak",
+        breaks = scales::breaks_width(1)
+    ) +
+    scale_y_continuous("# of consensus peaks",
+        labels = comma,
+        trans = "log10"
+    ) +
+    my_grid()
+my_ggsave("Figures/hap-selective-peaks-sharing.pdf", width = 3, height = 2)
+
+# accessibility diff by sharing level
+sharing_diff <- hap_sel_wide %>%
+    mutate(sharing_cat = fcase(
+        n_ind_hap_sel == 1, "1",
+        n_ind_hap_sel == 2, "2",
+        n_ind_hap_sel == 3, "3",
+        n_ind_hap_sel >= 4 & n_ind_hap_sel < 9, "4-8",
+        default = "9+"
+    )) %>%
+    mutate(sharing_cat = factor(sharing_cat,
+        levels = c("1", "2", "3", "4-8", "9+")
+    ))
+
+median_labels <- sharing_diff %>%
+    group_by(sharing_cat) %>%
+    summarise(
+        median_diff = median(abs(diff), na.rm = TRUE),
+        n = n()
+    )
+
+sharing_diff %>%
+    ggplot(aes(x = sharing_cat, y = abs(diff))) +
+    geom_violin(fill = "grey90", color = "black") +
+    geom_text(
+        data = median_labels,
+        aes(y = median_diff, label = paste0(round(100 * median_diff, 1), "%")),
+        vjust = 0, size = 2
+    ) +
+    geom_text(
+        data = median_labels,
+        aes(y = 0.2, label = paste0("n=", comma(n))),
+        vjust = 1, size = 2
+    ) +
+    scale_y_continuous("| Accessibility difference |", labels = percent) +
+    xlab("# individuals sharing peak") +
+    my_grid()
+
+my_ggsave(
+    "Figures/hap-selective-peaks-diff-by-sharing.pdf",
+    width = 3, height = 2
+)
+```
+
+
+```{r}
+glimpse(hap_sel_wide)
+```
+
+
+```{r}
+set.seed(42)
+table_to_use <- hap_sel_wide %>%
+    filter(Individual_ID != "HG002") %>%
+    filter(
+        n_ind_hap_sel == 5,
+        fire_coverage_1 + fire_coverage_2 > 15,
+        !is.na(hg38_chr)
+    ) %>%
+    ungroup() %>%
+    sample_n(5)
+glimpse(table_to_use)
+
+fwrite(table_to_use,
+    "Tables/example-hap-selective-peaks-sample.tsv",
+    sep = "\t",
+    row.name = FALSE,
+    col.names = TRUE,
+    quote = FALSE
+)
+```
+

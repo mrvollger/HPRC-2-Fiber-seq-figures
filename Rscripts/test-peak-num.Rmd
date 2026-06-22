@@ -1,0 +1,37 @@
+```{r setup}
+source("Rscripts/utils.R")
+
+# Global thresholds for calling a site a "peak" in a given sample
+MIN_FIRE_COV <- 4
+MIN_FRAC_ACC <- 0.20
+
+# Haplotype analysis thresholds
+DIFF_THRESHOLD <- 0.25
+MIN_HAP_COV <- 10
+```
+
+```{r}
+union_df <- my_read_bed(cmd = "bgzip -dc -@ 8 Tables/union-peaks-cons.bed.gz", sort = FALSE)
+```
+
+```{r}
+union_df %>%
+    filter(is_primary_sample) %>%
+    filter(is_peak) %>%
+    pull(consensus_peak_id) %>%
+    unique() %>%
+    length()
+```
+
+```{r}
+peak_df <- my_read_bed(cmd = "bgzip -dc -@ 8 Tables/peaks-cons.bed.gz", sort = FALSE)
+```
+
+```{r}
+peak_df %>%
+    filter(is_primary_sample) %>%
+    filter(is_peak) %>%
+    pull(consensus_peak_id) %>%
+    unique() %>%
+    length()
+```
