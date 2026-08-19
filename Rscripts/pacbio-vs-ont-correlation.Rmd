@@ -1,0 +1,176 @@
+```{r setup}
+source("Rscripts/utils.R")
+# Column definitions: see Tables/union-peaks-README.md
+```
+
+# Load union peaks (consensus coords, all sites)
+```{r load-data}
+union_df <- my_read_bed(
+    cmd = "bgzip -dc -@ 8 Tables/union-peaks-cons.bed.gz",
+    sort = FALSE
+)
+cat("Total rows:", nrow(union_df), "\n")
+```
+
+# Restrict to individuals with both PacBio and ONT
+```{r both-platforms}
+plats_per_ind <- union_df[
+    !is.na(Platform),
+    .(platforms = paste(sort(unique(Platform)), collapse = ",")),
+    by = Individual_ID
+]
+ind_with_both <- plats_per_ind[platforms == "ONT,PacBio", Individual_ID]
+cat("Individuals with both PacBio and ONT:", length(ind_with_both), "\n")
+print(ind_with_both)
+
+df <- union_df[Individual_ID %in% ind_with_both & !is.na(Platform)]
+cat("Rows after restricting to those individuals:", nrow(df), "\n")
+```
+
+# Aggregate over haplotypes per (Individual_ID, Platform, consensus_peak_id)
+```{r aggregate}
+# Sum coverage/fire across both haplotypes so the per-hap label (which may not be
+# comparable across platforms) doesn't matter for a genome-wide comparison.
+df_agg <- df[, .(
+    coverage = sum(coverage, na.rm = TRUE),
+    fire_coverage = sum(fire_coverage, na.rm = TRUE),
+    is_peak = any(is_peak, na.rm = TRUE)
+), by = .(Individual_ID, Platform, consensus_peak_id)]
+df_agg[, fire_cov_OV_cov := fire_coverage / coverage]
+cat("Aggregated rows:", nrow(df_agg), "\n")
+```
+
+# Pivot PacBio vs ONT and filter to peaks in at least one platform
+```{r pivot-and-filter}
+MIN_COV <- 30
+
+key_cols <- c("Individual_ID", "consensus_peak_id")
+val_cols <- c("coverage", "fire_coverage", "fire_cov_OV_cov", "is_peak")
+
+pb <- df_agg[Platform == "PacBio", c(key_cols, val_cols), with = FALSE]
+ont <- df_agg[Platform == "ONT", c(key_cols, val_cols), with = FALSE]
+setnames(pb, val_cols, paste0(val_cols, "_pb"))
+setnames(ont, val_cols, paste0(val_cols, "_ont"))
+
+pb_ont <- merge(pb, ont, by = key_cols)
+cat("Sites measured in both platforms:", nrow(pb_ont), "\n")
+
+# is_peak in PacBio OR ONT for this individual
+pb_ont <- pb_ont[is_peak_pb == TRUE | is_peak_ont == TRUE]
+cat("Sites that are a peak in PacBio or ONT:", nrow(pb_ont), "\n")
+
+# require >= MIN_COV total coverage in both platforms (summed across haps)
+pb_ont <- pb_ont[coverage_pb >= MIN_COV & coverage_ont >= MIN_COV]
+cat("Sites with >=", MIN_COV, "coverage in both platforms:", nrow(pb_ont), "\n")
+```
+
+# Per-individual Pearson correlations (genome-wide)
+```{r correlations}
+correlations <- pb_ont[,
+    {
+        r <- cor(fire_cov_OV_cov_pb, fire_cov_OV_cov_ont, method = "pearson")
+        n <- .N
+        # cor.test() p-values underflow to 0 at huge n; compute log p on the
+        # t-distribution directly and report log10(p) so it stays informative.
+        t_stat <- r * sqrt(n - 2) / sqrt(1 - r^2)
+        log_p <- pt(-abs(t_stat), df = n - 2, log.p = TRUE) + log(2)
+        .(
+            n_sites = n,
+            pearson_r = r,
+            p_value = exp(log_p),
+            log10_p = log_p / log(10)
+        )
+    },
+    by = Individual_ID
+][order(Individual_ID)]
+
+correlations
+fwrite(
+    correlations,
+    "Tables/pacbio-vs-ont-correlations.tsv",
+    sep = "\t", quote = FALSE
+)
+cat("Saved Tables/pacbio-vs-ont-correlations.tsv\n")
+```
+
+# Scatter: accessibility (PacBio vs ONT) per individual
+```{r scatter-accessibility}
+pb_ont %>%
+    ggplot(aes(x = fire_cov_OV_cov_pb, y = fire_cov_OV_cov_ont)) +
+    geom_hex(bins = 40) +
+    scale_fill_distiller("", palette = "Spectral", trans = "log10") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    stat_cor(method = "pearson", size = 2) +
+    facet_wrap(~Individual_ID) +
+    scale_x_continuous("PacBio accessibility (fire/coverage)",
+        labels = percent, limits = c(0, 1)
+    ) +
+    scale_y_continuous("ONT accessibility (fire/coverage)",
+        labels = percent, limits = c(0, 1)
+    ) +
+    coord_equal() +
+    my_grid()
+my_ggsave(
+    "Figures/pacbio-vs-ont-accessibility-scatter.pdf",
+    width = 6, height = 6
+)
+```
+
+# Histogram: PacBio - ONT accessibility delta per individual
+```{r delta-histogram}
+delta_summary <- pb_ont[, .(
+    median_delta = median(fire_cov_OV_cov_pb - fire_cov_OV_cov_ont,
+        na.rm = TRUE
+    ),
+    mean_delta = mean(fire_cov_OV_cov_pb - fire_cov_OV_cov_ont,
+        na.rm = TRUE
+    )
+), by = Individual_ID]
+delta_summary
+
+pb_ont %>%
+    mutate(delta = fire_cov_OV_cov_pb - fire_cov_OV_cov_ont) %>%
+    ggplot(aes(x = delta)) +
+    geom_histogram(
+        binwidth = 0.02, fill = "grey70", color = "black",
+        linewidth = 0.2
+    ) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+    geom_vline(
+        data = delta_summary,
+        aes(xintercept = mean_delta),
+        color = "blue", linetype = "dotted"
+    ) +
+    geom_text(
+        data = delta_summary,
+        aes(
+            x = mean_delta,
+            y = Inf,
+            label = paste0("mean = ", percent(mean_delta, accuracy = 0.1))
+        ),
+        color = "blue", size = 2, hjust = -0.05, vjust = 1.5
+    ) +
+    facet_wrap(~Individual_ID, scales = "free_y") +
+    scale_x_continuous(
+        "PacBio - ONT accessibility",
+        labels = percent, limits = c(-1, 1)
+    ) +
+    scale_y_continuous("# peaks", labels = comma) +
+    my_grid()
+my_ggsave(
+    "Figures/pacbio-vs-ont-accessibility-delta-hist.pdf",
+    width = 6, height = 4
+)
+```
+
+
+```{r}
+pb_ont %>%
+    group_by(Individual_ID) %>%
+    summarise(
+        mean(coverage_pb),
+        median(coverage_pb),
+        mean(coverage_ont),
+        median(coverage_ont)
+    )
+```
