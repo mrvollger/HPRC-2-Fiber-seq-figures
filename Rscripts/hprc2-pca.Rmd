@@ -1,0 +1,161 @@
+# HPRC2 ancestry PCA with Fiber-seq samples highlighted
+
+Replicates the PCA space of HPRC2 Fig. 1d (bioRxiv 10.64898/2026.07.21.739710) and
+marks the HPRC2 samples for which we have Fiber-seq data.
+
+The space is PCLAI's reference PCA (Geleta et al. 2026, bioRxiv 10.64898/2026.03.23.713813):
+1,561 low-admixture 1000G samples, two haplotypes each, embedded in PC1/PC2. HPRC2
+haplotypes are not points in that reference, so a haplotype's position here is the
+genome-wide mean of PCLAI's per-window predictions (`scripts/pclai-hap-means.sh`).
+Haplotypes are plotted separately, so an admixed individual shows up as two points.
+That averaging tracks an independent genotype PCA closely (Procrustes R^2 = 0.97 against
+gnomAD, and no worse for admixed samples), but for recently admixed individuals the mean
+is a centroid between ancestry clusters rather than a place any window sits;
+`sd_x1`/`sd_x2` in the means table carry the per-window spread.
+
+```{r setup}
+source("Rscripts/utils.R")
+library(mrvplot) # `pixi run setup` if this fails
+```
+
+```{r load-tables}
+# 1000G reference cloud: 1,561 samples x 2 haplotypes in the PCLAI PC1/PC2 space.
+ref_df <- fread("metadata/pclai_reference_pca.tsv")
+setnames(ref_df, c("Sample", "Haplotype"), c("sample_id", "haplotype"))
+
+# 1000G population -> superpopulation. Not used for colour, but it makes the
+# table that mrv_ggsave() writes alongside the figure self-describing.
+super_pop_df <- unique(
+    fread("metadata/1kg_3202_samples_population.txt")[, .(
+        sample_id = SampleID, pop = Population, super_pop = Superpopulation
+    )]
+)
+ref_df <- merge(ref_df, super_pop_df, by = "sample_id", all.x = TRUE)
+
+# Genome-wide mean PCLAI coordinate per HPRC2 haplotype (463 haplotypes).
+hprc_df <- fread("metadata/pclai_hap_means.tsv")
+
+# HPRC2 release 2 sample table.
+hprc_meta <- fread("metadata/hprc2.metadata.tbl")[, .(
+    sample_id = `Sample ID`,
+    pop = `Population Abbreviation`,
+    pop_descriptor = `Population Descriptor`
+)]
+
+# Which HPRC2 individuals we have Fiber-seq for, and on which platform.
+fiberseq_df <- fread("metadata/fiberseq.metadata.tbl")[, .(
+    platform = fcase(
+        uniqueN(Platform) > 1, "PacBio + ONT",
+        all(Platform == "PacBio"), "PacBio",
+        default = "ONT"
+    )
+), by = .(sample_id = Individual_ID)]
+
+hprc_df <- merge(hprc_df, hprc_meta, by = "sample_id", all.x = TRUE)
+hprc_df <- merge(hprc_df, fiberseq_df, by = "sample_id", all.x = TRUE)
+
+# GM12878 is in the Fiber-seq manifest but is not an HPRC2 sample, and HG00272 /
+# GRCh38 are in HPRC2 but have no PCLAI predictions. Report rather than hide.
+setdiff(fiberseq_df$sample_id, hprc_df$sample_id)
+hprc_df[, .N, by = platform]
+```
+
+```{r hprc2-pca}
+CLASS_COLORS <- c(
+    "1000G reference" = "grey85",
+    "HPRC2" = "grey45",
+    "CHM13" = "forestgreen",
+    "Fiber-seq" = "purple"
+)
+CLASS_ORDER <- names(CLASS_COLORS)
+
+set_class <- function(dt, cls) dt[, class := factor(cls, levels = CLASS_ORDER)][]
+ref_df <- set_class(ref_df, "1000G reference")
+# CHM13 is a complete hydatidiform mole, so PCLAI releases one haplotype for it
+# rather than two. Splitting it out keeps the HPRC2 count an even 2 per sample.
+hprc_df[, class := factor(
+    fcase(
+        sample_id == "CHM13", "CHM13",
+        !is.na(platform), "Fiber-seq",
+        default = "HPRC2"
+    ),
+    levels = CLASS_ORDER
+)]
+chm13_df <- hprc_df[class == "CHM13"]
+fs_df <- hprc_df[class == "Fiber-seq"]
+
+# h1-h2 of the same individual, so admixed Fiber-seq samples read as a pair.
+# Only drawn if every Fiber-seq sample has both haplotypes: a partial set of
+# segments would read as a real difference between samples rather than as
+# missing data. CHM13 is the one HPRC2 sample without a pair (it is haploid).
+fs_pairs <- dcast(fs_df, sample_id + platform ~ haplotype, value.var = c("x1", "x2"))
+hap_pairs_complete <- fs_df[, .N, by = sample_id][, all(N == 2)]
+hap_pairs_complete
+
+segment_layer <- if (hap_pairs_complete) {
+    geom_segment(
+        data = fs_pairs,
+        aes(x = x1_1, y = x2_1, xend = x1_2, yend = x2_2),
+        color = "black", linewidth = 0.2, alpha = 0.5,
+        inherit.aes = FALSE
+    )
+}
+
+# Every diploid HPRC2 haplotype is drawn grey; the Fiber-seq ones are then ringed
+# in purple so the underlying point still shows through.
+hprc_all <- copy(hprc_df[class != "CHM13"])[
+    , class := factor("HPRC2", levels = CLASS_ORDER)
+]
+
+# Counts are haplotypes. n_hprc is the whole release, so the Fiber-seq count is a
+# subset of it rather than a separate group. 463 not 464 because CHM13 is haploid.
+n_ref <- nrow(ref_df)
+n_hprc <- nrow(hprc_all)
+n_fs <- nrow(fs_df)
+
+# One table behind the figure so mrv_ggsave() journals it.
+pca_df <- rbind(
+    ref_df[, .(sample_id, haplotype, x1, x2, pop, super_pop, platform = NA_character_, class)],
+    hprc_df[, .(sample_id, haplotype, x1, x2, pop, super_pop = NA_character_, platform, class)]
+)
+pca_df
+
+p <- ggplot(pca_df, aes(x = x1, y = x2, color = class)) +
+    geom_point(data = ref_df, size = 0.5, alpha = 0.5, shape = 16) +
+    geom_point(data = hprc_all, size = 1, alpha = 0.7, shape = 16) +
+    geom_point(data = chm13_df, size = 1, shape = 16) +
+    # segment_layer +
+    geom_point(
+        data = fs_df,
+        size = 1, shape = 21, fill = NA, stroke = 0.5
+    ) +
+    scale_color_manual(
+        "",
+        values = CLASS_COLORS, drop = FALSE,
+        labels = c(
+            "1000G reference" = glue("1000G reference (n = {n_ref})"),
+            "HPRC2" = glue("HPRC2 (n = {n_hprc})"),
+            "CHM13" = "CHM13 (n = 1)",
+            "Fiber-seq" = glue("Fiber-seq (n = {n_fs})")
+        ),
+        guide = guide_legend(
+            nrow = 2,
+            override.aes = list(
+                shape = c(16, 16, 16, 21), size = c(2, 2, 2, 2.2),
+                fill = NA, stroke = 0.6, alpha = 1
+            )
+        )
+    ) +
+    scale_x_continuous("Mean PCLAI coordinate (reference PC1)") +
+    scale_y_continuous("Mean PCLAI coordinate (reference PC2)") +
+    coord_fixed() +
+    theme_bw(base_size = 8) +
+    theme(
+        legend.position = "top",
+        legend.key.size = unit(0.4, "cm"),
+        panel.grid = element_blank(),
+        aspect.ratio = 1
+    )
+
+mrv_ggsave("Figures/hprc2-pca.pdf", plot = p, width = 3, height = 3)
+```

@@ -1,0 +1,235 @@
+Sample ID	Alternative ID	Biosample Accession	Population Descriptor	Population Abbreviation	Family ID	Maternal ID	Paternal ID	Trio Available	Sex	Tissue	Project	Contributors	Collection
+CHM13	Unspecified	SAMN03255769	N/A	N/A	Unspecified	Unspecified	Unspecified	false	N/A	N/A	extramural	T2T Consortium	N/A
+GRCh38	Unspecified	SAMN12121739	N/A	N/A	Unspecified	Unspecified	Unspecified	false	N/A	N/A	extramural	Human Genome Project	N/A
+HG002	NA24385	SAMN03283347	N/A	N/A	Unspecified	NA24695	NA24694	true	male	N/A	extramural	NHGRI-NIST	GIAB
+HG005	NA26107	SAMN03283350	N/A	N/A	Unspecified	HG004	HG003	true	male	B-Lymphocyte	extramural	NHGRI-NIST	GIAB
+HG00097	Unspecified	SAMN41021660	British from England and Scotland	GBR	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00099	Unspecified	SAMN33758778	British from England and Scotland	GBR	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00126	Unspecified	SAMN41021637	British from England and Scotland	GBR	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00128	Unspecified	SAMN41021641	British from England and Scotland	GBR	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00133	Unspecified	SAMN41021638	British from England and Scotland	GBR	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00140	Unspecified	SAMN33621941	British from England and Scotland	GBR	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00146	Unspecified	SAMN41021634	British from England and Scotland	GBR	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00232	Unspecified	SAMN41021635	British from England and Scotland	GBR	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00235	Unspecified	SAMN41021667	British from England and Scotland	GBR	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00253	Unspecified	SAMN41021666	British from England and Scotland	GBR	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00272	Unspecified	SAMN41021659	Finnish in Finland	FIN	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00280	Unspecified	SAMN33758779	Finnish in Finland	FIN	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00290	Unspecified	SAMN41021639	Finnish in Finland	FIN	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00320	Unspecified	SAMN41021632	Finnish in Finland	FIN	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00321	Unspecified	SAMN41021636	Finnish in Finland	FIN	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00323	Unspecified	SAMN33621942	Finnish in Finland	FIN	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00329	Unspecified	SAMN41021646	Finnish in Finland	FIN	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00344	Unspecified	SAMN41021653	Finnish in Finland	FIN	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00350	Unspecified	SAMN41021654	Finnish in Finland	FIN	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00408	Unspecified	SAMN33621943	Han Chinese South, China	CHS	SH002	HG00407	HG00406	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00423	Unspecified	SAMN26237490	Han Chinese South, China	CHS	SH007	HG00422	HG00421	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00438	Unspecified	SAMN17861652	Han Chinese South, China	CHS	SH012	HG00437	HG00436	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00544	Unspecified	SAMN26237491	Han Chinese South, China	CHS	SH042	HG00543	HG00542	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00558	Unspecified	SAMN33758780	Han Chinese South, China	CHS	SH045	HG00557	HG00556	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00597	Unspecified	SAMN33621944	Han Chinese South, China	CHS	SH058	HG00596	HG00595	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00609	Unspecified	SAMN26237492	Han Chinese South, China	CHS	SH062	HG00608	HG00607	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00621	Unspecified	SAMN17861653	Han Chinese South, China	CHS	SH066	HG00620	HG00619	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00639	Unspecified	SAMN33758781	Puerto Rican in Puerto Rico	PUR	PR03	HG00638	HG00637	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00642	Unspecified	SAMN26267378	Puerto Rican in Puerto Rico	PUR	PR04	HG00641	HG00640	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00658	Unspecified	SAMN37797096	Han Chinese South, China	CHS	SH074	HG00657	HG00656	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00673	Unspecified	SAMN17861654	Han Chinese South, China	CHS	SH079	HG00672	HG00671	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00706	Unspecified	SAMN37706905	Han Chinese South, China	CHS	SH090	HG00705	HG00704	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00733	Unspecified	SAMN00006581	Puerto Rican in Puerto Rico	PUR	Unspecified	HG00732	HG00731	true	female	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG00735	Unspecified	SAMN17861655	Puerto Rican in Puerto Rico	PUR	PR06	HG00734	HG01047	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG00738	Unspecified	SAMN26237493	Puerto Rican in Puerto Rico	PUR	PR07	HG00737	HG00736	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG00741	Unspecified	SAMN17861656	Puerto Rican in Puerto Rico	PUR	PR09	HG00740	HG00739	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01071	Unspecified	SAMN17861657	Puerto Rican in Puerto Rico	PUR	PR17	HG01070	HG01069	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01074	Unspecified	SAMN33758782	Puerto Rican in Puerto Rico	PUR	PR18	HG01073	HG01072	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01081	Unspecified	SAMN33758783	Puerto Rican in Puerto Rico	PUR	PR21	HG01080	HG01079	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01099	Unspecified	SAMN26237494	Puerto Rican in Puerto Rico	PUR	PR31	HG01098	HG01097	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01106	Unspecified	SAMN17861658	Puerto Rican in Puerto Rico	PUR	PR25	HG01105	HG01104	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01109	Unspecified	SAMN12162846	Puerto Rican in Puerto Rico	PUR	Unspecified	HG01108	HG01107	true	male	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG01123	Unspecified	SAMN17861232	Colombian in Medellin, Colombia	CLM	CLM02	HG01122	HG01121	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01150	Unspecified	SAMN37797097	Colombian in Medellin, Colombia	CLM	CLM12	HG01149	HG01148	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01167	Unspecified	SAMN41021679	Puerto Rican in Puerto Rico	PUR	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01175	Unspecified	SAMN17861659	Puerto Rican in Puerto Rico	PUR	PR36	HG01174	HG01173	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01192	Unspecified	SAMN33621945	Puerto Rican in Puerto Rico	PUR	PR40	HG01191	HG01190	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01243	Unspecified	SAMN13957917	Puerto Rican in Puerto Rico	PUR	Unspecified	HG01242	HG01241	true	male	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG01252	Unspecified	SAMN37797098	Colombian in Medellin, Colombia	CLM	CLM14	HG01251	HG01250	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01255	Unspecified	SAMN26237495	Colombian in Medellin, Colombia	CLM	CLM15	HG01254	HG01253	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01258	Unspecified	SAMN17861233	Colombian in Medellin, Colombia	CLM	CLM16	HG01257	HG01256	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01261	Unspecified	SAMN33621946	Colombian in Medellin, Colombia	CLM	CLM17	HG01260	HG01259	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01346	Unspecified	SAMN26267379	Colombian in Medellin, Colombia	CLM	CLM27	HG01345	HG01344	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01358	Unspecified	SAMN17861234	Colombian in Medellin, Colombia	CLM	CLM31	HG01357	HG01356	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01361	Unspecified	SAMN17861235	Colombian in Medellin, Colombia	CLM	CLM32	HG01360	HG01359	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01433	Unspecified	SAMN26237496	Colombian in Medellin, Colombia	CLM	CLM43	HG01432	HG01431	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01496	Unspecified	SAMN26237497	Colombian in Medellin, Colombia	CLM	CLM64	HG01495	HG01494	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01530	Unspecified	SAMN37797099	Iberian Populations in Spain	IBS	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01784	Unspecified	SAMN37797100	Iberian Populations in Spain	IBS	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01786	Unspecified	SAMN41021633	Iberian Populations in Spain	IBS	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01884	Unspecified	SAMN26267393	African Caribbean in Barbados	ACB	BB03	HG01956	HG01885	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01891	Unspecified	SAMN17861236	African Caribbean in Barbados	ACB	BB05	HG01889	HG01890	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01928	Unspecified	SAMN17861660	Peruvian in Lima, Peru	PEL	PEL011	HG01927	HG01926	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01934	Unspecified	SAMN26237498	Peruvian in Lima, Peru	PEL	PEL013	HG01933	HG01932	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01940	Unspecified	SAMN37797101	Peruvian in Lima, Peru	PEL	PEL015	HG01939	HG01938	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01943	Unspecified	SAMN26237499	Peruvian in Lima, Peru	PEL	PEL016	HG01942	HG01941	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01952	Unspecified	SAMN17861661	Peruvian in Lima, Peru	PEL	PEL019	HG01951	HG01950	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG01960	Unspecified	SAMN37797102	African Caribbean in Barbados	ACB	BB11	HG01989	HG01988	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01969	Unspecified	SAMN37797103	Peruvian in Lima, Peru	PEL	PEL023	HG01968	HG01967	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01975	Unspecified	SAMN33621947	Peruvian in Lima, Peru	PEL	PEL25	HG01973	HG01974	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01978	Unspecified	SAMN17861662	Peruvian in Lima, Peru	PEL	PEL26	HG01976	HG01977	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01981	Unspecified	SAMN26237500	Peruvian in Lima, Peru	PEL	PEL27	HG01980	HG01979	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG01993	Unspecified	SAMN26237501	Peruvian in Lima, Peru	PEL	PEL29	HG01992	HG01991	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02004	Unspecified	SAMN26237502	Peruvian in Lima, Peru	PEL	PEL33	HG02003	HG02002	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02015	Unspecified	SAMN33621948	Kinh in Ho Chi Minh City, Vietnam	KHV	VN046	HG02016	HG02017	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02027	Unspecified	SAMN26237503	Kinh in Ho Chi Minh City, Vietnam	KHV	VN050	HG02028	HG02029	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02040	Unspecified	SAMN33758784	Kinh in Ho Chi Minh City, Vietnam	KHV	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02055	Unspecified	SAMN12162856	African Caribbean in Barbados	ACB	Unspecified	HG02054	HG02053	true	male	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG02056	Unspecified	SAMN33621949	Kinh in Ho Chi Minh City, Vietnam	KHV	VN060	HG02057	HG02058	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02071	Unspecified	SAMN26267380	Kinh in Ho Chi Minh City, Vietnam	KHV	VN065	HG02072	HG02073	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02074	Unspecified	SAMN26267381	Kinh in Ho Chi Minh City, Vietnam	KHV	VN066	HG02075	HG02076	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02080	Unspecified	SAMN13957942	Kinh in Ho Chi Minh City, Vietnam	KHV	Unspecified	HG02081	HG02082	true	female	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG02083	Unspecified	SAMN26237504	Kinh in Ho Chi Minh City, Vietnam	KHV	VN069	HG02084	HG02085	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02109	Unspecified	SAMN13958415	African Caribbean in Barbados	ACB	Unspecified	HG02108	HG02107	true	female	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG02129	Unspecified	SAMN33621950	Kinh in Ho Chi Minh City, Vietnam	KHV	VN079	HG02130	HG02131	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02132	Unspecified	SAMN26267382	Kinh in Ho Chi Minh City, Vietnam	KHV	VN080	HG02133	HG02134	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02135	Unspecified	SAMN26267392	Kinh in Ho Chi Minh City, Vietnam	KHV	VN081	HG02136	HG02137	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02145	Unspecified	SAMN13961514	African Caribbean in Barbados	ACB	Unspecified	HG02144	HG02143	true	male	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG02148	Unspecified	SAMN17861663	Peruvian in Lima, Peru	PEL	PEL39	HG02147	HG02146	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02155	Unspecified	SAMN33621951	Chinese Dai in Xishuangbanna	CDX	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02165	Unspecified	SAMN33758785	Chinese Dai in Xishuangbanna	CDX	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02178	Unspecified	SAMN41021617	Chinese Dai in Xishuangbanna	CDX	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02257	Unspecified	SAMN17861237	African Caribbean in Barbados	ACB	BB21	HG02256	HG02255	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02258	Unspecified	SAMN33621952	African Caribbean in Barbados	ACB	BB22	HG02315	HG02314	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02273	Unspecified	SAMN33621953	Peruvian in Lima, Peru	PEL	PEL46	HG02272	HG02271	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02280	Unspecified	SAMN26237505	African Caribbean in Barbados	ACB	BB23	HG02308	HG02307	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02293	Unspecified	SAMN26267394	Peruvian in Lima, Peru	PEL	PEL51	HG02292	HG02291	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02300	Unspecified	SAMN26267395	Peruvian in Lima, Peru	PEL	PEL52	HG02298	HG02299	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02391	Unspecified	SAMN37797104	Chinese Dai in Xishuangbanna	CDX	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02392	Unspecified	SAMN41021615	Chinese Dai in Xishuangbanna	CDX	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02451	Unspecified	SAMN33758786	African Caribbean in Barbados	ACB	BB46	HG02450	HG02449	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02486	Unspecified	SAMN17861238	African Caribbean in Barbados	ACB	BB55	HG02485	HG02484	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02514	Unspecified	SAMN37797105	Kinh in Ho Chi Minh City, Vietnam	KHV	VN087	HG02513	HG02512	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02523	Unspecified	SAMN26237506	Kinh in Ho Chi Minh City, Vietnam	KHV	VN090	HG02522	HG02521	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02559	Unspecified	SAMN17861239	African Caribbean in Barbados	ACB	BB68	HG02558	HG02557	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02572	Unspecified	SAMN17861240	Gambian in Western Division Ð Mandinka	GWD	GB21	HG02571	HG02570	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02583	Unspecified	SAMN41021657	Gambian in Western Division Ð Mandinka	GWD	GB23	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02602	Unspecified	SAMN26237507	Punjabi in Lahore, Pakistan	PJL	PK09	HG02601	HG02600	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02615	Unspecified	SAMN26237508	Gambian in Western Division Ð Mandinka	GWD	GB29	HG02614	HG02613	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02622	Unspecified	SAMN17861664	Gambian in Western Division Ð Mandinka	GWD	GB31	HG02621	HG02620	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02630	Unspecified	SAMN17861665	Gambian in Western Division Ð Mandinka	GWD	GB33	HG02629	HG02628	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02647	Unspecified	SAMN26267383	Gambian in Western Division Ð Mandinka	GWD	GB38	HG02646	HG02645	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02668	Unspecified	SAMN37706906	Gambian in Western Division Ð Mandinka	GWD	GB40	HG02667	HG02666	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02698	Unspecified	SAMN26237509	Punjabi in Lahore, Pakistan	PJL	PK21	HG02697	HG02696	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02717	Unspecified	SAMN17861666	Gambian in Western Division Ð Mandinka	GWD	GB50	HG02716	HG02715	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02723	Unspecified	SAMN13958364	Gambian in Western Division Ð Mandinka	GWD	Unspecified	HG02722	HG02721	true	female	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG02735	Unspecified	SAMN33758787	Punjabi in Lahore, Pakistan	PJL	PK26	HG02734	HG02733	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02738	Unspecified	SAMN26267396	Punjabi in Lahore, Pakistan	PJL	PK27	HG02737	HG02736	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02809	Unspecified	SAMN26237510	Gambian in Western Division Ð Mandinka	GWD	GB63	HG02808	HG02807	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02818	Unspecified	SAMN05603745	Gambian in Western Division Ð Mandinka	GWD	Unspecified	HG02817	HG02816	true	female	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG02841	Unspecified	SAMN37797106	Gambian in Western Division Ð Mandinka	GWD	GB74	HG02840	HG02839	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02886	Unspecified	SAMN17861667	Gambian in Western Division Ð Mandinka	GWD	GB89	HG02885	HG02884	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02922	Unspecified	SAMN33758788	Esan in Nigeria	ESN	NG06	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02965	Unspecified	SAMN33621954	Esan in Nigeria	ESN	NG20	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG02976	Unspecified	SAMN33621955	Esan in Nigeria	ESN	NG24	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG02984	Unspecified	SAMN37797107	Gambian in Western Division Ð Mandinka	GWD	GB97	HG02983	HG02982	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03017	Unspecified	SAMN33758789	Punjabi in Lahore, Pakistan	PJL	PK35	HG03016	HG03015	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03041	Unspecified	SAMN33758790	Gambian in Western Division Ð Mandinka	GWD	GB110	HG03040	HG03039	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03050	Unspecified	SAMN37797108	Gambian in Western Division Ð Mandinka	GWD	GB113	HG03049	HG03048	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03098	Unspecified	SAMN13957944	Mende in Sierra Leone	MSL	Unspecified	HG03097	HG03096	true	male	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG03130	Unspecified	SAMN33758791	Esan in Nigeria	ESN	NG36	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03139	Unspecified	SAMN33758792	Esan in Nigeria	ESN	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03195	Unspecified	SAMN33621956	Esan in Nigeria	ESN	NG58	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03209	Unspecified	SAMN33758793	Mende in Sierra Leone	MSL	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03225	Unspecified	SAMN33621957	Mende in Sierra Leone	MSL	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03239	Unspecified	SAMN33758794	Punjabi in Lahore, Pakistan	PJL	PK41	HG03238	HG03237	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03270	Unspecified	SAMN41021631	Esan in Nigeria	ESN	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03369	Unspecified	SAMN41021668	Esan in Nigeria	ESN	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03453	Unspecified	SAMN17861668	Mende in Sierra Leone	MSL	SL50	HG03452	HG03451	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03470	Unspecified	SAMN37797110	Mende in Sierra Leone	MSL	SL56	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03471	Unspecified	SAMN17861669	Mende in Sierra Leone	MSL	SL56i	Unspecified	HG03469	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03486	Unspecified	SAMN08723473	Mende in Sierra Leone	MSL	Unspecified	HG03485	HG03484	true	female	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+HG03516	Unspecified	SAMN17861241	Esan in Nigeria	ESN	NG107	HG03514	HG03515	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03521	Unspecified	SAMN41021651	Esan in Nigeria	ESN	NG109	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03540	Unspecified	SAMN17861670	Gambian in Western Division Ð Mandinka	GWD	GB125	HG03539	HG03538	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03579	Unspecified	SAMN17861671	Mende in Sierra Leone	MSL	SL72	HG03578	HG03577	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03583	Unspecified	SAMN41021645	Mende in Sierra Leone	MSL	SL73	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03654	Unspecified	SAMN26237511	Punjabi in Lahore, Pakistan	PJL	PK53	HG03653	HG03652	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03669	Unspecified	SAMN26237512	Punjabi in Lahore, Pakistan	PJL	PK58	HG03668	HG03667	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03688	Unspecified	SAMN26267385	Sri Lankan Tamil in the UK	STU	ST016	HG03886	HG03885	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03704	Unspecified	SAMN33758795	Punjabi in Lahore, Pakistan	PJL	PK60	HG03703	HG03702	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03710	Unspecified	SAMN26237513	Punjabi in Lahore, Pakistan	PJL	PK62	HG03709	HG03708	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03742	Unspecified	SAMN37797111	Indian Telugu in the UK	ITU	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+HG03784	Unspecified	SAMN41021647	Indian Telugu in the UK	ITU	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03804	Unspecified	SAMN37706907	Bengali in Bangladesh	BEB	BD18	HG03802	HG03803	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03816	Unspecified	SAMN37706908	Bengali in Bangladesh	BEB	BD22	HG03814	HG03815	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03831	Unspecified	SAMN26237514	Bengali in Bangladesh	BEB	BD27	HG03829	HG03830	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03834	Unspecified	SAMN33621958	Bengali in Bangladesh	BEB	BD28	HG03832	HG03833	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03874	Unspecified	SAMN41021625	Indian Telugu in the UK	ITU	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03927	Unspecified	SAMN26267386	Bengali in Bangladesh	BEB	BD37	HG03925	HG03926	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG03942	Unspecified	SAMN26267387	Bengali in Bangladesh	BEB	BD42	HG03940	HG03941	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG04115	Unspecified	SAMN26267388	Sri Lankan Tamil in the UK	STU	ST111	HG03894	HG03896	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG04157	Unspecified	SAMN37706909	Bengali in Bangladesh	BEB	BD52	HG04156	HG04155	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG04160	Unspecified	SAMN37706910	Bengali in Bangladesh	BEB	BD53	HG04159	HG04158	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG04184	Unspecified	SAMN26267397	Bengali in Bangladesh	BEB	BD61	HG04183	HG04182	true	female	B-Lymphocyte	HPRC	NIH	1000G
+HG04187	Unspecified	SAMN37706911	Bengali in Bangladesh	BEB	BD62	HG04186	HG04185	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG04199	Unspecified	SAMN26267389	Sri Lankan Tamil in the UK	STU	ST203	HG04099	HG04100	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG04204	Unspecified	SAMN26267390	Sri Lankan Tamil in the UK	STU	ST006	HG03642	HG03679	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG04228	Unspecified	SAMN26267391	Sri Lankan Tamil in the UK	STU	ST232	HG04227	HG04229	true	male	B-Lymphocyte	HPRC	NIH	1000G
+HG06807	PAN027	SAMN33621959	African Americans living in St. Louis, Missouri	ASL	Unspecified	HG06803	HG06804	true	female	N/A	extramural	UCSC-Masaryk University	N/A
+NA18505	Unspecified	SAMN41021643	Yoruba in Ibadan, Nigeria	YRI	Y005	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA18508	Unspecified	SAMN41021626	Yoruba in Ibadan, Nigeria	YRI	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA18522	Unspecified	SAMN33758796	Yoruba in Ibadan, Nigeria	YRI	Y016	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA18565	Unspecified	SAMN41021669	Han Chinese in Beijing, China	CHB	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA18570	Unspecified	SAMN37797086	Han Chinese in Beijing, China	CHB	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA18608	Unspecified	SAMN41021619	Han Chinese in Beijing, China	CHB	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA18620	Unspecified	SAMN41021618	Han Chinese in Beijing, China	CHB	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA18747	Unspecified	SAMN33758797	Han Chinese in Beijing, China	CHB	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA18879	Unspecified	SAMN41021661	Yoruba in Ibadan, Nigeria	YRI	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA18906	Unspecified	SAMN13957875	Yoruba in Ibadan, Nigeria	YRI	Unspecified	NA18876	NA18877	true	female	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+NA18940	Unspecified	SAMN44671128	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	AMED	1000G
+NA18943	Unspecified	SAMN44671129	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	AMED	1000G
+NA18944	Unspecified	SAMN44671130	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	AMED	1000G
+NA18945	Unspecified	SAMN44671131	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	AMED	1000G
+NA18948	Unspecified	SAMN44671132	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	AMED	1000G
+NA18952	Unspecified	SAMN41021621	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA18959	Unspecified	SAMN44671133	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	AMED	1000G
+NA18960	Unspecified	SAMN44671134	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	AMED	1000G
+NA18967	Unspecified	SAMN44671135	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	AMED	1000G
+NA18970	Unspecified	SAMN44671136	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	AMED	1000G
+NA18971	Unspecified	SAMN33621961	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA18974	Unspecified	SAMN41021620	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA18976	Unspecified	SAMN41021622	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA18982	Unspecified	SAMN44671137	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	AMED	1000G
+NA18983	Unspecified	SAMN33758798	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA19036	Unspecified	SAMN41021642	Luhya in Webuye, Kenya	LWK	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA19043	Unspecified	SAMN33758799	Luhya in Webuye, Kenya	LWK	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA19087	Unspecified	SAMN37797087	Japanese in Tokyo, Japan	JPT	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA19159	Unspecified	SAMN37797089	Yoruba in Ibadan, Nigeria	YRI	Y056	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA19185	Unspecified	SAMN37797090	Yoruba in Ibadan, Nigeria	YRI	Y039	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA19240	Unspecified	SAMN03838746	Yoruba in Ibadan, Nigeria	YRI	Unspecified	NA19238	NA19239	true	female	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+NA19338	Unspecified	SAMN37797091	Luhya in Webuye, Kenya	LWK	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA19391	Unspecified	SAMN37797092	Luhya in Webuye, Kenya	LWK	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA19443	Unspecified	SAMN41021640	Luhya in Webuye, Kenya	LWK	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA19468	Unspecified	SAMN37797093	Luhya in Webuye, Kenya	LWK	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA19682	Unspecified	SAMN41021611	Mexican Ancestry in Los Angeles, California, USA	MXL	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA19700	Unspecified	SAMN41021612	African Ancestry in Southwest USA	ASW	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA19776	Unspecified	SAMN41021610	Mexican Ancestry in Los Angeles, California, USA	MXL	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA19835	Unspecified	SAMN41021665	African Ancestry in Southwest USA	ASW	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA19909	Unspecified	SAMN41021607	African Ancestry in Southwest USA	ASW	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA20129	Unspecified	SAMN13207712	African Ancestry in Southwest USA	ASW	Unspecified	NA19921	NA19920	true	female	B-Lymphocyte	HPRC_PLUS	NIH	1000G
+NA20282	Unspecified	SAMN41021608	African Ancestry in Southwest USA	ASW	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA20346	Unspecified	SAMN41021609	African Ancestry in Southwest USA	ASW	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA20503	Unspecified	SAMN41021630	Toscani in Italia	TSI	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPP	Human Technopole	1000G
+NA20752	Unspecified	SAMN33758800	Toscani in Italia	TSI	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA20762	Unspecified	SAMN41021652	Toscani in Italia	TSI	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	Human Technopole	1000G
+NA20799	Unspecified	SAMN37797094	Toscani in Italia	TSI	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA20805	Unspecified	SAMN33621962	Toscani in Italia	TSI	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA20806	Unspecified	SAMN41021648	Toscani in Italia	TSI	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	Human Technopole	1000G
+NA20809	Unspecified	SAMN41021671	Toscani in Italia	TSI	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA20827	Unspecified	SAMN41021650	Toscani in Italia	TSI	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPP	Human Technopole	1000G
+NA20850	Unspecified	SAMN41021664	Gujarati Indians in Houston, Texas, USA	GIH	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA20870	Unspecified	SAMN41021623	Gujarati Indians in Houston, Texas, USA	GIH	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA20905	Unspecified	SAMN33758801	Gujarati Indians in Houston, Texas, USA	GIH	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA21093	Unspecified	SAMN41021627	Gujarati Indians in Houston, Texas, USA	GIH	Unspecified	Unspecified	Unspecified	false	male	B-Lymphocyte	HPRC	NIH	1000G
+NA21102	Unspecified	SAMN41021672	Gujarati Indians in Houston, Texas, USA	GIH	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA21106	Unspecified	SAMN41021629	Gujarati Indians in Houston, Texas, USA	GIH	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA21110	Unspecified	SAMN41021624	Gujarati Indians in Houston, Texas, USA	GIH	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA21144	Unspecified	SAMN41021649	Gujarati Indians in Houston, Texas, USA	GIH	Unspecified	Unspecified	Unspecified	false	female	B-Lymphocyte	HPRC	NIH	1000G
+NA21309	Unspecified	SAMN11308573	Maasai in Kinyawa, Kenya	MKK	Unspecified	NA21308	NA21307	true	female	B-Lymphocyte	HPRC_PLUS	NIH	HapMap
