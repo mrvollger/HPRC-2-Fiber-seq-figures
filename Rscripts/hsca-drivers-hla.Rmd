@@ -1,0 +1,432 @@
+# HSCA driver variants are enriched in the HLA region
+
+Genome-wide view of where phylo-FIRE attributes haplotype-selective chromatin
+accessibility (HSCA) to sequence. Forward-selection joint regression assigns driver
+variants per tested peak; a peak is a *driver peak* if at least one variant is
+attributed. The ideogram shows driver peaks piling up in the MHC beyond the
+genome-wide rate, which is what motivates the HLA zoom-in.
+
+Coordinates are CHM13 v2.0 (the consensus/graph reference the peaks are called in),
+and the ideogram uses the CHM13 cytoband stains.
+
+Tables come from `scripts/hsca-driver-peaks.sh` (phylo-FIRE run `hsca_hapsel` over
+all HPRC Fiber-seq samples, plus the full consensus peak set from `mrv-figures`).
+
+```{r setup}
+source("Rscripts/utils.R")
+library(mrvplot) # `pixi run setup` if this fails
+library(karyoploteR)
+```
+
+```{r load-tables}
+CHROMS <- paste0("chr", 1:22) # autosomes only
+
+# Every consensus FIRE peak: the background, and the honest denominator for
+# "is this region unusually sequence-driven".
+all_peaks <- fread("metadata/all_peaks_chm13.tsv.gz")[chrom %in% CHROMS]
+
+# The haplotype-selective peaks phylo-FIRE actually tested, with driver calls.
+tested <- fread("metadata/hsca_driver_peaks.tsv.gz")[chrom %in% CHROMS]
+drivers <- tested[has_driver == TRUE]
+
+cat(
+    "all peaks:", nrow(all_peaks),
+    "| HSCA tested:", nrow(tested),
+    "| driver peaks:", nrow(drivers), "\n"
+)
+
+# CHM13 ideogram scaffolding.
+chrom_sizes <- fread("metadata/chm13v2.0.chrom.sizes",
+    col.names = c("chrom", "size")
+)[chrom %in% CHROMS]
+chrom_sizes[, chrom := factor(chrom, levels = CHROMS)]
+setorder(chrom_sizes, chrom)
+chm13_genome <- toGRanges(data.frame(
+    chr = as.character(chrom_sizes$chrom), start = 1, end = chrom_sizes$size
+))
+chm13_cyto <- toGRanges(as.data.frame(
+    fread("metadata/chm13v2.0_cytobands.bed",
+        col.names = c("chr", "start", "end", "name", "gieStain")
+    )[chr %in% CHROMS]
+))
+
+# MHC in CHM13 coordinates, defined as GABBR1 through KIFC1 (3.80 Mb), matching
+# how the driver-element counts are tabulated elsewhere in the project. Gene
+# bounds from the UCSC hs1 catLiftOffGenesV1 track:
+#   GABBR1 chr6:29,430,312-29,508,680   KIFC1 chr6:33,213,184-33,231,258
+MHC <- list(chrom = "chr6", start = 29430312, end = 33231258)
+```
+
+```{r hla-enrichment}
+# Two framings, because they answer different questions.
+#   vs tested : given a haplotype-selective peak that was tested, is it more often
+#               sequence-driven in the MHC? This is the driver-attribution claim.
+#   vs all    : relative to all regulatory elements, does the MHC carry more
+#               sequence-driven HSCA? This folds in the MHC being peak-dense.
+in_mhc <- function(dt) dt$chrom == MHC$chrom & dt$start >= MHC$start & dt$end <= MHC$end
+
+fisher_row <- function(k_in, n_in, k_out, n_out, label) {
+    tab <- matrix(c(k_in, n_in - k_in, k_out, n_out - k_out),
+        nrow = 2,
+        dimnames = list(c("driver", "not"), c("MHC", "rest"))
+    )
+    ft <- fisher.test(tab)
+    data.table(
+        comparison = label,
+        mhc = sprintf("%d/%d (%.1f%%)", k_in, n_in, 100 * k_in / n_in),
+        rest = sprintf("%d/%d (%.1f%%)", k_out, n_out, 100 * k_out / n_out),
+        odds_ratio = round(unname(ft$estimate), 2),
+        ci = sprintf("%.2f-%.2f", ft$conf.int[1], ft$conf.int[2]),
+        p = signif(ft$p.value, 3)
+    )
+}
+
+tested[, mhc := in_mhc(tested)]
+all_peaks[, mhc := in_mhc(all_peaks)]
+
+enrichment <- rbind(
+    fisher_row(
+        tested[mhc == TRUE, sum(has_driver)], tested[mhc == TRUE, .N],
+        tested[mhc == FALSE, sum(has_driver)], tested[mhc == FALSE, .N],
+        "drivers / HSCA peaks tested"
+    ),
+    fisher_row(
+        tested[mhc == TRUE, sum(has_driver)], all_peaks[mhc == TRUE, .N],
+        tested[mhc == FALSE, sum(has_driver)], all_peaks[mhc == FALSE, .N],
+        "drivers / all FIRE peaks"
+    ),
+    fisher_row(
+        tested[mhc == TRUE, .N], all_peaks[mhc == TRUE, .N],
+        tested[mhc == FALSE, .N], all_peaks[mhc == FALSE, .N],
+        "HSCA tested / all FIRE peaks"
+    )
+)
+enrichment
+```
+
+```{r rolling-window-test}
+# Scan for regions where tested peaks are unusually often sequence-driven.
+#
+# The window is a fixed NUMBER OF PEAKS, not a fixed number of base pairs. Peak
+# density varies by more than an order of magnitude along the genome, so fixed-bp
+# windows carry wildly unequal power: a 5 Mb window held anywhere from 20 to 200+
+# tested peaks, and the binomial test was correspondingly noisy in sparse ones.
+# A fixed peak count gives every window the same n and makes the p-values
+# comparable across the genome.
+ROLL_PEAKS <- 200 # tested peaks per window
+ROLL_STEP <- 50 # peaks between window starts
+
+GENOME_RATE <- nrow(drivers) / nrow(tested)
+
+setorder(tested, chrom, start)
+roll <- tested[,
+    {
+        n <- .N
+        if (n < ROLL_PEAKS) {
+            NULL
+        } else {
+            # frollsum is right-aligned: element i holds the sum over (i-k+1):i.
+            hits <- frollsum(as.numeric(has_driver), ROLL_PEAKS)
+            i <- seq(ROLL_PEAKS, n, by = ROLL_STEP)
+            .(
+                win_start = start[i - ROLL_PEAKS + 1], win_end = end[i],
+                mid = (start[i - ROLL_PEAKS + 1] + end[i]) / 2,
+                n_drivers = hits[i]
+            )
+        }
+    },
+    by = chrom
+]
+
+roll[, `:=`(
+    n_tested = ROLL_PEAKS,
+    rate = n_drivers / ROLL_PEAKS,
+    span_mb = (win_end - win_start) / 1e6
+)]
+# One-sided binomial upper tail, vectorised; equivalent to binom.test(alternative
+# = "greater") but cheap enough to run over every window.
+roll[, p := pbinom(n_drivers - 1, n_tested, GENOME_RATE, lower.tail = FALSE)]
+roll[, fdr := p.adjust(p, method = "BH")]
+
+# Windows are overlapping, so BH here is a screen for where to look, not a clean
+# family-wise statement. The MHC claim rests on the pre-specified test below.
+roll[, overlaps_mhc := chrom == MHC$chrom & win_start <= MHC$end & win_end >= MHC$start]
+
+cat(
+    "rolling windows:", nrow(roll), "of", ROLL_PEAKS, "peaks each;",
+    "median span", round(median(roll$span_mb), 1), "Mb\n"
+)
+cat("windows at FDR < 0.05:", roll[fdr < 0.05, .N], "\n\n")
+
+cat("top windows by driver rate:\n")
+print(head(roll[order(-rate), .(chrom,
+    Mb = round(mid / 1e6, 1), span_mb = round(span_mb, 1),
+    n_drivers, rate = round(rate, 3), fdr = signif(fdr, 2), overlaps_mhc
+)], 10))
+
+cat("\nwindows overlapping the MHC:\n")
+print(roll[overlaps_mhc == TRUE, .(chrom,
+    Mb = round(mid / 1e6, 1), span_mb = round(span_mb, 1),
+    n_drivers, rate = round(rate, 3), fdr = signif(fdr, 2)
+)])
+```
+
+
+```{r normalised-density}
+# Densities on a common grid, each scaled to sum to 1 so "all peaks" and "driver
+# peaks" enclose the same total area. That turns the comparison into "where are
+# drivers concentrated RELATIVE to where peaks are", instead of the raw counts,
+# where all peaks (566k) would dwarf drivers (3.2k).
+#
+# Sliding, not tiled: counts are binned at DENSITY_STEP and then summed over
+# DENSITY_WINDOW / DENSITY_STEP consecutive bins, so each plotted point is a
+# 5 Mb window and consecutive points overlap by 4.5 Mb. Overlap inflates every
+# curve by the same factor, so the equal-area comparison between curves is
+# unaffected. The sum is right-aligned with the centre computed explicitly,
+# which stays correct for an even DENSITY_K where align = "center" would not.
+#
+# This grid is for PLOTTING only. The statistical scan uses rolling windows of a
+# fixed peak count instead, since peak density varies far too much for a fixed-bp
+# window to carry constant power.
+DENSITY_WINDOW <- 5e6
+DENSITY_STEP <- 5e5
+DENSITY_K <- DENSITY_WINDOW / DENSITY_STEP
+stopifnot(DENSITY_WINDOW %% DENSITY_STEP == 0)
+
+grid <- chrom_sizes[, .(window = seq(0, size, by = DENSITY_STEP)), by = chrom]
+
+bin_density <- function(dt, label) {
+    b <- dt[, .N, by = .(chrom, window = floor(start / DENSITY_STEP) * DENSITY_STEP)]
+    d <- merge(grid, b, by = c("chrom", "window"), all.x = TRUE)
+    d[is.na(N), N := 0L]
+    setorder(d, chrom, window)
+    # Windowed count via cumulative sums rather than frollsum: frollsum has to
+    # fill the leading DENSITY_K - 1 bins, and filling them with 0 makes the
+    # first 4.5 Mb of every chromosome read as empty. cumsum gives those bins
+    # their true partial-window count instead.
+    d[, cs := cumsum(N), by = chrom]
+    # data.table::shift qualified: utils.R loads IRanges, which masks shift().
+    d[, n_win := cs - data.table::shift(cs, DENSITY_K, fill = 0), by = chrom]
+    # Window covers [w + STEP - WINDOW, w + STEP), clamped to the chromosome
+    # start so the centre of a partial window is not reported off the sequence.
+    d[, win_start := pmax(0, window + DENSITY_STEP - DENSITY_WINDOW)]
+    d[, `:=`(
+        frac = n_win / sum(n_win),
+        mid = (win_start + window + DENSITY_STEP) / 2,
+        track = label
+    )]
+    d[, cs := NULL]
+    d[]
+}
+
+dens_all <- bin_density(all_peaks, "all peaks")
+dens_tested <- bin_density(tested, "HSCA tested")
+dens_drivers <- bin_density(drivers, "driver peaks")
+dens <- rbind(dens_all, dens_tested, dens_drivers)
+dens[, .(total_area = sum(frac), max_frac = round(max(frac), 4)), by = track]
+```
+
+```{r karyotype-helper}
+# Shared CHM13 karyotype for both figures.
+#   chromosomes = "all": a custom genome has no canonical-chromosome list, so
+#     without it karyoploteR heuristically filters and warns. chm13_genome is
+#     already restricted to the autosomes.
+#   cyto_colors["border"]: at whole-genome scale each band is a couple of pixels
+#     wide, so the default black band borders swamp the stain fill and the
+#     ideogram renders solid black. The entry must be overridden in place --
+#     appending a second "border" with c() does nothing, because
+#     color.table["border"] matches the built-in one first.
+base_karyotype <- function(pp, label = "MHC") {
+    cyto_colors <- getCytobandColors(color.schema = "circos")
+    cyto_colors["border"] <- "transparent"
+    kp <- plotKaryotype(
+        genome = chm13_genome, cytobands = chm13_cyto, chromosomes = "all",
+        plot.type = 4, cex = 0.3, plot.params = pp, ideogram.plotter = NULL
+    )
+    kpAddCytobands(kp, color.table = cyto_colors)
+    # Mark the MHC with a tick at the base of the data panel plus a label, rather
+    # than a band across it. At genome scale 4.8 Mb is about two pixels wide, so a
+    # band saturated enough to read also covers the chr6 spike it points at, and
+    # widening it to compensate would misrepresent the interval.
+    kpRect(kp,
+        chr = MHC$chrom, x0 = MHC$start, x1 = MHC$end, y0 = 0, y1 = 1,
+        col = "#e69138", border = "#e69138", lwd = 1.5, r0 = -0.02, r1 = 0.06
+    )
+    # Label above the data; inside the panel it gets buried under the density fill.
+    kpText(kp,
+        chr = MHC$chrom, x = mean(c(MHC$start, MHC$end)), y = 1.06,
+        labels = label, col = "#e69138", cex = 0.75
+    )
+    kp
+}
+
+
+FIG <- "Figures/hsca-drivers-ideogram.pdf"
+
+draw_ideogram <- function() {
+    pp <- getDefaultPlotParams(plot.type = 4)
+    pp$data1height <- 300 # data vs ideogram balance
+    pp$ideogramheight <- 30 # default 10 is a hairline at this width
+    pp$ideogramlateralmargin <- 0.0005 # gap between chromosomes; default 0.003
+    pp$leftmargin <- 0.03
+    pp$rightmargin <- 0.01
+    pp$bottommargin <- 18
+    pp$topmargin <- 42 # room for the MHC label above the data
+
+    # Fisher result folded into the MHC label as one centred string, read from
+    # the enrichment table so the figure cannot drift out of sync with the test.
+    # Two kpText calls do not line up: kpText centres vertically on y, while
+    # pos = 4 uses a baseline offset, so the two strings sit at different
+    # heights and butt together horizontally with no gap.
+    # The main figure plots drivers against all peaks, so that is the row quoted.
+    e <- enrichment[comparison == "drivers / all FIRE peaks"]
+    ex <- floor(log10(e$p))
+    mant <- round(e$p / 10^ex, 1)
+    kp <- base_karyotype(pp, label = bquote(
+        bold("MHC") ~ ~ OR == .(sprintf("%.1f", e$odds_ratio)) *
+            "," ~ italic(P) == .(mant) %*% 10^.(ex)
+    ))
+
+    # One data row, three area-normalised densities overlaid. Each curve encloses
+    # the same total area, so height is "share of this class found here" and the
+    # curves are directly comparable despite 566k vs 23k vs 3.2k peaks. Where red
+    # clears grey, drivers are concentrated beyond where peaks simply are.
+    # Scale to the two curves actually drawn; HSCA tested is a supplementary
+    # comparison and stays out of the main figure.
+    dmax <- max(dens_all$frac, dens_drivers$frac)
+    area <- function(d, fill, line) {
+        kpArea(kp,
+            chr = d$chrom, x = d$mid, y = d$frac / dmax,
+            r0 = 0.02, r1 = 1, col = fill, border = line, lwd = 0.3
+        )
+    }
+    area(dens_all, "grey60", "grey35")
+    area(dens_drivers, paste0(Red, "66"), Red)
+    kpAddLabels(kp, "peak density", r0 = 0.02, r1 = 1, cex = 0.7, srt = 90, pos = 3)
+    legend("topleft",
+        legend = c("all peaks", "driver peaks"),
+        fill = c("grey60", paste0(Red, "66")),
+        border = c("grey35", Red), bty = "n", cex = 0.7, horiz = TRUE, xpd = NA
+    )
+}
+
+# karyoploteR draws to a device rather than returning a ggplot, so mrv_ggsave()
+# cannot be used. Do what it does by hand: write the figure, copy it to tmp.pdf
+# for previewing over VS Code/SSH, and journal the data behind it.
+save_karyoplot <- function(file, draw, width, height, tables = list(), tmp = TRUE) {
+    dir.create(dirname(file), showWarnings = FALSE, recursive = TRUE)
+    dir.create(file.path(dirname(file), "Tables"), showWarnings = FALSE, recursive = TRUE)
+    pdf(file, width = width, height = height)
+    draw()
+    invisible(dev.off())
+    # Only the main figure claims tmp.*, so the preview always shows the figure
+    # being iterated on rather than whichever chunk happened to run last.
+    if (tmp) file.copy(file, paste0("tmp.", tools::file_ext(file)), overwrite = TRUE)
+    for (nm in names(tables)) {
+        fwrite(tables[[nm]],
+            file.path(dirname(file), "Tables", paste0(nm, ".tbl.gz")),
+            sep = "\t"
+        )
+    }
+    print(file)
+}
+
+save_karyoplot(FIG, draw_ideogram, width = 12, height = 2, tables = list(
+    # The curves the figure actually draws: one row per class per window.
+    "hsca-drivers-ideogram" = dens[, .(track, chrom, window, mid, n = n_win, frac)],
+    # Statistics kept separate from the plotted data.
+    "hsca-drivers-rolling-test" = roll,
+    "hsca-drivers-enrichment" = enrichment
+))
+```
+
+# Supplementary: driver rate under two denominators
+
+The main figure normalises by area, which shows *where* drivers concentrate but not
+*how often* a peak is sequence-driven. These two tracks divide the same driver counts
+by the two denominators the question can take:
+
+- **/ HSCA tested** — of the haplotype-selective peaks phylo-FIRE tested, what fraction
+  got a driver attributed. Conditions on the peak already being haplotype-selective.
+- **/ all FIRE peaks** — of every regulatory element, what fraction is a sequence-driven
+  HSCA peak. Folds in the MHC being both peak-dense and unusually haplotype-selective.
+
+```{r rate-denominators}
+# Per-window rates on the same sliding grid, for the journalled table. n_win is
+# the windowed count, so these are 2.5 Mb windows stepping 0.5 Mb.
+rates <- Reduce(
+    function(a, b) merge(a, b, by = c("chrom", "window")),
+    list(
+        dens_drivers[, .(chrom, window, mid, n_drivers = n_win)],
+        dens_tested[, .(chrom, window, n_tested = n_win)],
+        dens_all[, .(chrom, window, n_all = n_win)]
+    )
+)
+
+# Windows with too few peaks in the denominator are dropped rather than reported
+# as 0/1 noise, separately for each denominator.
+MIN_TESTED_PER_WINDOW <- 10
+MIN_ALL_PER_WINDOW <- 100
+rates[, `:=`(
+    rate_hsca = fifelse(n_tested >= MIN_TESTED_PER_WINDOW, n_drivers / n_tested, NA_real_),
+    rate_all = fifelse(n_all >= MIN_ALL_PER_WINDOW, n_drivers / n_all, NA_real_)
+)]
+
+BASE_HSCA <- nrow(drivers) / nrow(tested)
+BASE_ALL <- nrow(drivers) / nrow(all_peaks)
+cat(sprintf(
+    "genome-wide: %.1f%% of HSCA tested peaks, %.2f%% of all peaks\n",
+    100 * BASE_HSCA, 100 * BASE_ALL
+))
+rates[
+    chrom == MHC$chrom & window >= MHC$start - 2e6 & window <= MHC$end + 2e6,
+    .(chrom, window, n_drivers, n_tested, n_all,
+        rate_hsca = round(rate_hsca, 3), rate_all = round(rate_all, 4)
+    )
+]
+```
+
+```{r hsca-drivers-denominators}
+SUPP <- "Figures/hsca-drivers-denominators.pdf"
+
+draw_denominators <- function() {
+    pp <- getDefaultPlotParams(plot.type = 4)
+    pp$data1height <- 300 # data vs ideogram balance
+    pp$ideogramheight <- 40 # default 10 is a hairline at this width
+    pp$ideogramlateralmargin <- 0.0005 # gap between chromosomes; default 0.003
+    pp$leftmargin <- 0.03
+    pp$rightmargin <- 0.01
+    pp$bottommargin <- 18
+    pp$topmargin <- 42 # room for the MHC label above the data
+    kp <- base_karyotype(pp)
+
+    # Same overlay as the main figure, run against each denominator in turn.
+    # Every curve is area-normalised, so within a row the two are directly
+    # comparable and the question is just "does red clear the background".
+    overlay <- function(bg, bg_fill, bg_line, label, r0, r1) {
+        ymax <- max(bg$frac, dens_drivers$frac)
+        kpArea(kp,
+            chr = bg$chrom, x = bg$mid, y = bg$frac / ymax,
+            r0 = r0, r1 = r1, col = bg_fill, border = bg_line, lwd = 0.3
+        )
+        kpArea(kp,
+            chr = dens_drivers$chrom, x = dens_drivers$mid,
+            y = dens_drivers$frac / ymax,
+            r0 = r0, r1 = r1, col = paste0(Red, "66"), border = Red, lwd = 0.3
+        )
+        kpAddLabels(kp, label, r0 = r0, r1 = r1, cex = 0.7, srt = 90, pos = 3)
+    }
+
+    overlay(dens_tested, paste0(Teal, "66"), Teal, "vs HSCA tested", 0.56, 1)
+    overlay(dens_all, "grey60", "grey35", "vs all peaks", 0.02, 0.46)
+    legend("topleft",
+        legend = c("HSCA tested", "all peaks", "driver peaks"),
+        fill = c(paste0(Teal, "66"), "grey60", paste0(Red, "66")),
+        border = c(Teal, "grey35", Red), bty = "n", cex = 0.7, horiz = TRUE, xpd = NA
+    )
+}
+
+save_karyoplot(SUPP, draw_denominators, width = 7.5, height = 3.2, tmp = FALSE, tables = list(
+    "hsca-drivers-denominators" = rates
+))
+```
