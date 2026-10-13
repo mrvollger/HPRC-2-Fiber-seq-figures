@@ -1,0 +1,220 @@
+# Lead GWAS variants in and near peaks with driver variants
+
+Are the peaks where phylo-FIRE attributes haplotype-selective accessibility to a
+driver variant enriched for GWAS variants? The baseline throughout is all other
+FIRE peaks: every consensus FIRE peak that is not a peak with a driver.
+
+* **Peaks with a lead GWAS variant**: the percentage of peaks that contain one,
+  for peaks with a driver next to all other FIRE peaks, with the observed over
+  expected ratio and a Fisher exact test.
+* **Distance** (`fire-figures/Rscripts/GWAS.Rmd`): for every lead GWAS variant,
+  the distance to the closest peak with a driver, as a cumulative fraction,
+  against same-size random samples of the other FIRE peaks.
+
+GWAS variants are the lead (index) SNPs of associations with p < 5e-8 in the
+PICS2 GWAS Catalog (2024-09-20, the release used for the FIRE paper), one row
+per GRCh38 position. Overlaps are by GRCh38 position. Autosomes only. Tables come
+from `scripts/hsca-gwas-tables.sh` and `scripts/hsca-driver-peaks.sh`.
+
+```{r setup}
+source("Rscripts/utils.R")
+```
+
+```{r params}
+AUTOSOMES <- paste0("chr", 1:22)
+N_NULL <- 10 # random samples of FIRE peaks for the distance curves
+MAX_DIST <- 50e3
+
+DRIVER <- "Peaks with a driver"
+FIRE <- "All other FIRE peaks"
+SET_COLORS <- setNames(c("#888888", "#d62728"), c(FIRE, DRIVER))
+```
+
+```{r load-tables}
+# lead SNPs only (is_index); the table also holds every SNP linked to them
+gwas <- fread("Tables/pics2-gwas-sites.tsv.gz")[
+    chrom %in% AUTOSOMES & is_index == 1,
+    .(chrom, start = pos - 1L, end = pos)
+]
+
+# every FIRE peak on GRCh38, with the phylo-FIRE driver call where it was tested
+# (has_driver is NA for peaks phylo-FIRE did not test)
+tested <- fread("metadata/hsca_driver_peaks.tsv.gz")[, .(peak_id, has_driver)]
+peaks <- fread("metadata/all_peaks_hg38.tsv.gz")[chrom %in% AUTOSOMES]
+peaks[, peak_id := gsub("#", "_", consensus_peak_id, fixed = TRUE)] # phylo-FIRE ids
+stopifnot(!anyDuplicated(peaks$peak_id))
+peaks <- merge(peaks, tested, by = "peak_id", all.x = TRUE)
+peaks[, is_driver := has_driver %in% TRUE]
+
+# lead GWAS variants inside each peak
+peaks <- peaks %>%
+    as_tibble() %>%
+    bed_map(as_tibble(gwas), n_gwas = n()) %>%
+    replace_na(list(n_gwas = 0)) %>%
+    data.table()
+peaks[, has_gwas := n_gwas > 0]
+
+c(lead_gwas_variants = nrow(gwas))
+# tested peaks, and how many of them have autosomal GRCh38 coordinates
+rbind(
+    tested = tested[, .(peaks = .N, with_driver = sum(has_driver))],
+    on_GRCh38 = peaks[!is.na(has_driver), .(peaks = .N, with_driver = sum(has_driver))]
+)
+```
+
+# Peaks with a lead GWAS variant
+```{r peaks-with-gwas}
+count_set <- function(x, name) x[, .(set = name, n_peaks = .N, with_gwas = sum(has_gwas))]
+pct <- rbind(
+    count_set(peaks[is_driver == FALSE], FIRE),
+    count_set(peaks[is_driver == TRUE], DRIVER),
+    # for context only, not plotted: tested peaks where no driver was found
+    count_set(peaks[has_driver %in% FALSE], "HSCA-var peaks, no driver")
+)[, frac := with_gwas / n_peaks]
+pct[]
+
+# Fisher exact test on peaks: peaks with a driver against all other FIRE peaks
+ft <- fisher.test(table(driver = peaks$is_driver, gwas = peaks$has_gwas))
+# O/E: observed share of driver peaks with a lead GWAS variant over the share
+# expected from all other FIRE peaks
+oe <- pct[set == DRIVER, frac] / pct[set == FIRE, frac]
+test_label <- paste0(
+    "O/E = ", round(oe, 2), "\np = ", format(ft$p.value, digits = 2, scientific = TRUE)
+)
+c(
+    obs_over_exp = oe, odds_ratio = unname(ft$estimate),
+    ci_low = ft$conf.int[1], ci_high = ft$conf.int[2], p = ft$p.value
+)
+```
+
+```{r peaks-with-gwas-plot, fig.alt="Bar chart of the percentage of peaks that contain a lead GWAS variant. Peaks with a driver are several times more likely to contain one than all other FIRE peaks, with the observed over expected ratio and the Fisher exact p-value shown above the bars."}
+plot_df <- pct[set %in% c(FIRE, DRIVER)][, set := factor(set, levels = c(FIRE, DRIVER))]
+bracket_y <- 1.2 * max(plot_df$frac)
+
+plot_df %>%
+    ggplot(aes(x = set, y = frac, fill = set)) +
+    geom_col(width = 0.7) +
+    geom_text(aes(label = percent(frac, accuracy = 0.1)), vjust = -0.4, size = 1.5) +
+    # significance bracket: a line between the two bars with short tips pointing down
+    geom_bracket(
+        xmin = FIRE, xmax = DRIVER, y.position = bracket_y, label = test_label,
+        label.size = 2, size = 0.25, tip.length = 0.03, vjust = -0.2,
+        inherit.aes = FALSE
+    ) +
+    scale_fill_manual(values = SET_COLORS) +
+    scale_y_continuous(
+        "Peaks with a lead GWAS variant",
+        labels = percent,
+        expand = expansion(mult = c(0, 0.2)) # headroom for the bracket label
+    ) +
+    # two rows per label
+    scale_x_discrete("", labels = setNames(
+        c("All other\nFIRE peaks", "Peaks with\na driver"), c(FIRE, DRIVER)
+    )) +
+    my_grid() +
+    theme(legend.position = "none")
+my_ggsave("Figures/hsca-gwas-peaks-with-lead-variant.pdf", width = 1.25, height = 2)
+```
+
+# Distance from lead GWAS variants to the closest peak with a driver
+```{r nearest-distance}
+#' Distance (bp) from each point to the nearest interval on its chromosome:
+#' 0 when the point is inside an interval, Inf when the chromosome has none.
+#' Matches `bedtools closest -d`. `points` are 1 bp BED rows (position = end).
+nearest_distance <- function(points, intervals) {
+    iv <- as.data.table(bed_merge(as_tibble(intervals[, .(chrom, start, end)])))
+    setorder(iv, chrom, start)
+    out <- rep(Inf, nrow(points))
+    for (chr in unique(points$chrom)) {
+        v <- iv[chrom == chr]
+        if (nrow(v) == 0) next
+        i <- which(points$chrom == chr)
+        p <- points$end[i]
+        k <- findInterval(p, v$start + 1L) # last interval starting at or before p
+        left <- ifelse(k > 0, pmax(p - v$end[pmax(k, 1L)], 0), Inf)
+        right <- ifelse(k < nrow(v), v$start[pmin(k + 1L, nrow(v))] + 1L - p, Inf)
+        out[i] <- pmin(left, right)
+    }
+    out
+}
+
+# self-check: inside, 1 bp past the end, between two intervals, no intervals
+local({
+    iv <- data.table(chrom = "chr1", start = c(100L, 200L), end = c(110L, 210L))
+    pts <- data.table(chrom = c(rep("chr1", 5), "chr2"), end = c(101L, 110L, 111L, 160L, 250L, 5L))
+    stopifnot(nearest_distance(pts, iv) == c(0, 0, 1, 41, 40, Inf))
+})
+```
+
+```{r distance}
+set.seed(1)
+drivers <- peaks[is_driver == TRUE, .(chrom, start, end)]
+others <- peaks[is_driver == FALSE, .(chrom, start, end)]
+grid <- seq(0, MAX_DIST, by = 250)
+SAMPLE <- "Random samples of all other FIRE peaks"
+
+# cumulative fraction of GWAS variants within each distance of the closest interval
+curve <- function(intervals) {
+    data.table(distance = grid, fraction = ecdf(nearest_distance(gwas, intervals))(grid))
+}
+# each random sample has as many peaks as there are peaks with a driver
+curves <- rbind(
+    cbind(type = DRIVER, rep = 0L, curve(drivers)),
+    cbind(type = SAMPLE, rbindlist(
+        lapply(seq_len(N_NULL), function(i) curve(others[sample(.N, nrow(drivers))])),
+        idcol = "rep"
+    ))
+)
+curves[, type := factor(type, levels = c(DRIVER, SAMPLE))]
+# a CDF never decreases
+stopifnot(curves[, all(diff(fraction) >= 0), by = .(type, rep)]$V1)
+
+# lead GWAS variants inside a peak (distance 0) and within 10 kb, mean over samples
+dcast(
+    curves[distance %in% c(0, 10e3), .(fraction = mean(fraction)), by = .(type, distance)],
+    type ~ distance,
+    value.var = "fraction"
+)
+```
+
+```{r distance-plot, fig.alt="Line chart of the cumulative fraction of lead GWAS variants by distance to the closest peak, out to 50 kb. The curve for peaks with a driver sits above the curves for same-size random samples of all other FIRE peaks."}
+TYPE_COLORS <- setNames(c(SET_COLORS[[DRIVER]], SET_COLORS[[FIRE]]), c(DRIVER, SAMPLE))
+curves %>%
+    ggplot(aes(x = distance, y = fraction, color = type, group = paste(type, rep))) +
+    geom_line(aes(linewidth = type)) +
+    scale_x_continuous(
+        "Distance from lead GWAS variant\nto the closest peak (bp)",
+        labels = comma
+    ) +
+    scale_y_continuous("Cumulative fraction of lead GWAS variants") +
+    scale_color_manual("", values = TYPE_COLORS) +
+    scale_linewidth_manual("", values = setNames(c(0.6, 0.2), c(DRIVER, SAMPLE))) +
+    guides(color = guide_legend(ncol = 1)) +
+    theme_cowplot(font_size = 6) +
+    theme(legend.position = "top")
+my_ggsave("Figures/hsca-gwas-distance-cumulative.pdf", width = 2.25, height = 2.5)
+```
+
+```{r distance-delta-plot, fig.alt="Line chart of the difference in cumulative fraction of lead GWAS variants between peaks with a driver and random samples of all other FIRE peaks, by distance out to 50 kb. The difference is positive at every distance."}
+# Difference between two cumulative curves: peaks with a driver minus the mean
+# of the random samples. This is not a CDF, so it can fall: it drops wherever
+# the samples are gaining GWAS variants faster, and returns to 0 once both
+# curves reach 1.
+delta <- merge(
+    curves[type == SAMPLE, .(null = mean(fraction)), by = distance],
+    curves[type == DRIVER, .(distance, driver = fraction)],
+    by = "distance"
+)[, delta := driver - null]
+
+delta %>%
+    ggplot(aes(x = distance, y = delta)) +
+    geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+    geom_line(linewidth = 0.4, color = SET_COLORS[[DRIVER]]) +
+    scale_x_continuous(
+        "Distance from lead GWAS variant\nto the closest peak (bp)",
+        labels = comma
+    ) +
+    scale_y_continuous("Difference in cumulative fraction\n(peaks with a driver minus other FIRE peaks)") +
+    my_grid()
+my_ggsave("Figures/hsca-gwas-distance-delta.pdf", width = 2.25, height = 2.25)
+```
