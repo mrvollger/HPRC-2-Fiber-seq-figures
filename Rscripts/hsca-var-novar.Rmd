@@ -1,0 +1,342 @@
+# HSCA classes: HSCA-noVar, HSCA-var, HSCA-SV
+
+Remake of the example-individual pie + class bar (panel f) and the per-sample beeswarm
+(panel g) from `old-or-unused/merged-DSA-peaks.Rmd`. Every non-shared RE is
+haplotype-selective chromatin accessibility (HSCA), named by its genetic cause,
+from none to the largest:
+
+* **HSCA-noVar**: accessibility differs, identical haplotype sequences (epigenetic)
+* **HSCA-var**: accessibility differs, sequences differ by SNVs or small indels
+* **HSCA-SV**: no one-to-one homolog on the other haplotype: the RE exists on one
+  haplotype only (`Genetically haplotype-specific`), several copies merge into one
+  consensus peak (`Complex`), or one haplotype's RE is < 75% the length of the other
+
+The accessibility test (diff + Fisher) is taken from `union-peaks.Rmd` as is.
+The sequence comparison is redone here (`compare-haplotypes`) and is meant as the
+template for updating `union-peaks.Rmd`. It fixes two problems with the upstream
+`has_het_variants`, which comes from a *local* alignment that counts only
+substitutions:
+
+1. Internal indels were invisible (a local alignment clips at the gap), so REs
+   with indels were called HSCA-noVar.
+2. Large length differences (`!sufficient_overlap`) were called HSCA-var; they are SVs.
+
+Peak-boundary noise (staggered or offset RE edges between the two haplotypes,
+e.g. from liftover) is ignored in two ways: an *overlap* alignment makes any end
+offset free, and differences in the first or last `EDGE_FRAC` (5%) of the
+aligned columns are not counted.
+
+Reads `Tables/union-peaks-asm.bed.gz` directly. Unit is one RE per individual (a
+consensus peak called on either haplotype). Autosomes and primary samples only;
+`Untestable` REs are excluded from every denominator, as in `hdca.Rmd`.
+
+```{r setup}
+source("Rscripts/utils.R")
+library(Biostrings)
+library(future.apply)
+```
+
+```{r params}
+EDGE_FRAC <- 0.05 # ignore differences in the first/last 5% of the aligned RE
+MIN_LEN_FRAC <- 0.75 # shorter haplotype RE below this fraction of the longer = SV
+HSCA_IN <- c("Haplotype-selective", "Epigenetically haplotype-selective")
+# panel f example: a typical individual. HG02572 (PacBio, 6.56% HSCA) is within
+# 0.01 points of the 39-individual median (6.57%); HG002 is the lowest (4.66%).
+EXAMPLE_ID <- "HG02572"
+```
+
+```{r load-tables}
+# union-peaks-asm.bed.gz from union-peaks.Rmd (symlink it into Tables/ if it
+# lives elsewhere). fread(cmd=) spools the stream to a temp file, and the full
+# table is tens of GB, so hck keeps only these columns and awk blanks `seq`
+# except on the two HSCA input classes (the only sequences compared below).
+UNION <- "Tables/union-peaks-asm.bed.gz"
+COLS <- c(
+    "is_peak", "Individual_ID", "Haplotype", "is_primary_sample", "Platform",
+    "autosome", "consensus_peak_id", "haplotype_distinct", "diff",
+    "has_het_variants", "seq"
+)
+HCK <- paste("hck -d '\\t'", paste("-F", COLS, collapse = " "))
+AWK <- paste0(
+    r"(awk -F'\t' -v OFS='\t' 'NR==1{for(i=1;i<=NF;i++){if($i=="seq")s=i; if($i=="haplotype_distinct")h=i}} )",
+    r"(NR>1 && $h!="Haplotype-selective" && $h!="Epigenetically haplotype-selective"{$s=""} 1')"
+)
+union <- fread(cmd = glue("bgzip -dc -@ 8 {UNION} | {HCK} | {AWK}"))[
+    is_primary_sample == TRUE & autosome == "Autosomes" &
+        !haplotype_distinct %in% c("chrX", "chrY", "Untestable") &
+        !is.na(haplotype_distinct)
+]
+
+# one row per RE per individual (both haplotype rows carry the same class/diff)
+res <- unique(union[is_peak == TRUE], by = c("Individual_ID", "consensus_peak_id"))
+res[, seq := NULL]
+
+# haplotype sequences side by side for the HSCA candidates (all rows, since the
+# haplotype without the peak call still has its sequence)
+hap_seqs <- dcast(
+    unique(union[haplotype_distinct %in% HSCA_IN],
+        by = c("Individual_ID", "consensus_peak_id", "Haplotype")
+    ),
+    Individual_ID + consensus_peak_id ~ paste0("seq_", Haplotype),
+    value.var = "seq"
+)
+rm(union)
+gc()
+```
+
+```{r compare-haplotypes}
+#' Count the internal differences between the two haplotype sequences of an RE.
+#'
+#' 1. Overlap alignment (end gaps are free, so staggered RE boundaries cost
+#'    nothing), forward and reverse complement, keeping the better score.
+#' 2. List every difference in the shared (aligned) region with its position:
+#'    mismatches (two different bases, ignoring N) and indel events.
+#' 3. Ignore differences in the first and last `edge_frac` of the aligned
+#'    region (boundary noise), and count the rest.
+#'
+#' Positions come straight from Biostrings (`mismatchTable`, `indel`), which is
+#' ~100x faster than converting each alignment to text and walking its columns.
+#' Returns one row per pair: `len_frac` (shorter / longer length), `n_mismatch`,
+#' `n_indel`.
+compare_haplotypes <- function(seq_1, seq_2, edge_frac = EDGE_FRAC) {
+    l1 <- nchar(seq_1)
+    l2 <- nchar(seq_2)
+    out <- data.table(
+        len_frac = pmin(l1, l2) / pmax(l1, l2),
+        n_mismatch = NA_integer_, n_indel = NA_integer_
+    )
+    ok <- which(!is.na(seq_1) & !is.na(seq_2) & pmin(l1, l2) > 0)
+    if (length(ok) == 0) {
+        return(out)
+    }
+    a <- DNAStringSet(toupper(seq_1[ok]))
+    b <- DNAStringSet(toupper(seq_2[ok]))
+    fwd <- pairwiseAlignment(a, b, type = "overlap")
+    rev <- pairwiseAlignment(a, reverseComplement(b), type = "overlap")
+
+    # internal differences of one set of alignments, as c(mismatches, indels) per pair
+    count_inside <- function(aln) {
+        n <- length(aln)
+        start <- start(pattern(aln)) # aligned region, in seq_1 coordinates
+        width <- width(pattern(aln))
+        edge <- ceiling(edge_frac * width)
+        inside <- function(id, pos) pos > edge[id] & pos <= width[id] - edge[id]
+        # mismatches: absolute seq_1 positions -> position within the aligned region
+        mm <- as.data.table(mismatchTable(aln))[
+            PatternSubstring != "N" & SubjectSubstring != "N"
+        ]
+        mm <- mm[inside(PatternId, PatternStart - start[PatternId] + 1)]
+        # indels: positions are already relative to the aligned region; one per event
+        ind <- rbind(
+            as.data.table(insertion(indel(aln))), as.data.table(deletion(indel(aln)))
+        )
+        ind <- ind[inside(group, start)]
+        cbind(tabulate(mm$PatternId, n), tabulate(ind$group, n))
+    }
+    use_rev <- score(rev) > score(fwd)
+    counts <- ifelse(cbind(use_rev, use_rev), count_inside(rev), count_inside(fwd))
+    out[ok, `:=`(n_mismatch = counts[, 1], n_indel = counts[, 2])]
+    out
+}
+
+# self-check on toy pairs: boundary noise is ignored, internal changes are not
+local({
+    ref <- "GGCATCAGTACGTACGTTTGACCAGTCAGTTA"
+    toy <- compare_haplotypes(
+        seq_1 = c(ref, ref, sub("TTTG", "TG", ref), sub("CGTT", "CGAT", ref), paste0("AC", ref), paste0("A", substr(ref, 2, 32))),
+        seq_2 = c(ref, paste0("TT", substr(ref, 4, 32), "GG"), ref, ref, ref, ref)
+    )
+    # same, staggered edges, internal deletion, internal SNV, edge offset, SNV at the edge
+    stopifnot(
+        toy$n_mismatch + toy$n_indel == c(0, 0, 1, 1, 0, 0),
+        all.equal(toy$len_frac[3], 30 / 32)
+    )
+})
+
+# chunked so it parallelizes, with a live progress bar (progressr relays
+# progress from the multicore workers as each chunk finishes)
+plan(multicore, workers = 8)
+chunks <- split(seq_len(nrow(hap_seqs)), ceiling(seq_len(nrow(hap_seqs)) / 2000))
+cmp <- progressr::with_progress({
+    p <- progressr::progressor(steps = nrow(hap_seqs))
+    rbindlist(future_lapply(chunks, function(i) {
+        out <- compare_haplotypes(hap_seqs$seq_1[i], hap_seqs$seq_2[i])
+        p(amount = length(i))
+        out
+    }))
+})
+plan(sequential)
+hap_seqs <- cbind(hap_seqs[, .(Individual_ID, consensus_peak_id)], cmp)
+```
+
+```{r classify}
+res <- merge(res, hap_seqs, by = c("Individual_ID", "consensus_peak_id"), all.x = TRUE)
+res[, is_hsca := haplotype_distinct %in% HSCA_IN]
+res[, class := fcase(
+    haplotype_distinct %in% c("Genetically haplotype-specific", "Complex"), "HSCA-SV",
+    is_hsca & len_frac < MIN_LEN_FRAC, "HSCA-SV",
+    is_hsca & n_mismatch + n_indel > 0, "HSCA-var",
+    is_hsca & n_mismatch + n_indel == 0, "HSCA-noVar",
+    # sequence missing for one haplotype: keep the upstream call
+    is_hsca & has_het_variants == TRUE, "HSCA-var",
+    is_hsca, "HSCA-noVar",
+    default = "Shared"
+)]
+# accessibility-difference bins for the HSCA classes (DIFF_THRESHOLD = 0.25)
+res[, diff_bin := fcase(
+    abs(diff) >= 0.50, "50%",
+    default = "25%"
+)]
+res[, .N, by = class][order(-N)]
+
+# what changed relative to the upstream labels
+res[is_hsca == TRUE, .N, by = .(upstream = haplotype_distinct, class)][order(upstream, class)]
+```
+
+```{r colors}
+CLASS_ORDER <- c("HSCA-noVar", "HSCA-var", "HSCA-SV")
+CLASS_COLORS <- c(
+    "HSCA-noVar" = "#800080",
+    "HSCA-var" = "#8b0000",
+    "HSCA-SV" = "#f0a500",
+    "Shared" = "#888888",
+    "HSCA" = "#3b3b3b" # the total: neutral, so no subclass reads as the whole
+)
+# accessibility-difference shades for the two HSCA classes (light -> dark = 25% -> 75%)
+SHADES <- c(
+    "HSCA-var 25%" = "#e8888a", "HSCA-var 50%" = "#c0392b", "HSCA-var 75%" = "#8b0000",
+    "HSCA-noVar 25%" = "#DA70D6", "HSCA-noVar 50%" = "#BF40BF", "HSCA-noVar 75%" = "#800080"
+)
+FILL_COLORS <- c(SHADES, CLASS_COLORS["HSCA-SV"])
+```
+
+# Panel f: example individual pie
+```{r example-pie}
+example <- res[Individual_ID == EXAMPLE_ID]
+
+# Shared (grey) plus the HSCA wedge split into its three classes, so the pie
+# uses the same colors as the bar; one label for Shared, one for the HSCA total.
+pie <- example[, .(n = .N), by = class][
+    , class := factor(class, levels = c("Shared", CLASS_ORDER))
+][order(class)][, `:=`(ymax = cumsum(n), ymin = cumsum(n) - n)]
+pie_labels <- rbind(
+    pie[class == "Shared", .(y = (ymin + ymax) / 2, n = n)],
+    pie[class != "Shared", .(y = (min(ymin) + max(ymax)) / 2, n = sum(n))]
+)[, label := paste0("n=", comma(n), "\n", round(100 * n / sum(pie$n), 1), "%")]
+
+pie %>%
+    ggplot() +
+    geom_rect(aes(xmin = 0, xmax = 1, ymin = ymin, ymax = ymax, fill = class)) +
+    geom_text(
+        data = pie_labels, aes(x = 0.65, y = y, label = label),
+        size = 1.5, color = "white"
+    ) +
+    coord_polar(theta = "y", start = pi / 2) +
+    scale_fill_manual(values = CLASS_COLORS) +
+    theme_void(base_size = 6) +
+    theme(legend.position = "none") # the bar beside it names the classes
+my_ggsave("Figures/hsca-var-novar-example-pie.pdf", width = 1.2, height = 1.2)
+```
+
+# Panel f: example individual HSCA classes
+```{r example-bar}
+hsca <- c("HSCA-var", "HSCA-noVar")
+example_bar <- example[class != "Shared"][, `:=`(
+    class = factor(class, levels = rev(CLASS_ORDER)),
+    fill = fifelse(class %in% hsca, paste(class, diff_bin), class)
+)][, .(n = .N), by = .(class, fill)]
+# 75% (darkest) stacks at the end of each bar, as in the original
+example_bar[, fill := factor(fill, levels = rev(names(FILL_COLORS)))]
+example_total <- nrow(example)
+# legend: only the accessibility-difference bins that occur (light -> dark order)
+bins_present <- intersect(
+    c("75%", "50%", "25%"), example[class %in% hsca, unique(diff_bin)]
+)
+
+example_bar %>%
+    ggplot(aes(y = class, x = n, fill = fill)) +
+    geom_bar(stat = "identity") +
+    geom_text(
+        data = . %>% group_by(class) %>%
+            summarise(n = sum(n)) %>%
+            mutate(label = paste0(
+                comma(n), " (",
+                fifelse(n / example_total < 0.001, "<0.1", as.character(round(100 * n / example_total, 1))),
+                "%)"
+            )),
+        aes(x = 0, label = label, fill = NULL),
+        hjust = -0.1, color = "black", size = 2, show.legend = FALSE
+    ) +
+    scale_fill_manual(
+        "Accessibility difference\nbetween haplotypes",
+        values = FILL_COLORS,
+        breaks = paste("HSCA-noVar", bins_present),
+        labels = bins_present
+    ) +
+    scale_x_continuous("# of FIRE peaks", labels = comma) +
+    ylab("") +
+    ggtitle(EXAMPLE_ID) +
+    my_grid() +
+    theme(
+        legend.position = "top",
+        legend.key.size = unit(0.2, "cm"),
+        plot.title = element_text(hjust = 0, face = "bold", size = 9)
+    ) +
+    guides(fill = guide_legend(nrow = 1))
+my_ggsave("Figures/hsca-var-novar-example-bar.pdf", width = 3, height = 1.2)
+```
+
+# Panel g: per-sample beeswarm
+```{r sample-beeswarm}
+set.seed(2)
+
+# % of each individual's REs in each group: the HSCA total, then its three classes
+GROUPS <- c("HSCA", CLASS_ORDER)
+per_sample <- res[, .(
+    group = factor(GROUPS, levels = GROUPS),
+    frac = c(mean(class != "Shared"), sapply(CLASS_ORDER, function(k) mean(class == k)))
+), by = .(Individual_ID, Platform)]
+
+# median per group: a black tick on the violin, labeled above the top point
+medians <- per_sample[, .(median = median(frac), top = max(frac)), by = group][
+    , label := percent(median, accuracy = 0.1)
+]
+
+per_sample %>%
+    ggplot(aes(x = group, y = frac, color = group)) +
+    geom_violin(
+        fill = "grey", color = NA, alpha = 0.5,
+        adjust = 1.5, scale = "width", width = 0.6
+    ) +
+    geom_quasirandom(width = 0.15, alpha = 0.5, size = 0.25) +
+    geom_errorbar(
+        data = medians, aes(y = median, ymin = median, ymax = median),
+        width = 0.4, linewidth = 0.4, color = "black"
+    ) +
+    geom_text(
+        data = medians, aes(y = top, label = label),
+        vjust = -0.6, size = 2, color = "black"
+    ) +
+    scale_color_manual(values = CLASS_COLORS) +
+    scale_y_continuous(
+        "% of FIREs with HSCA",
+        limits = c(0, NA),
+        labels = scales::percent_format(accuracy = 1),
+        expand = expansion(mult = c(0.02, 0.12)) # headroom for the median labels
+    ) +
+    xlab(glue("HPRC Fiber-seq samples (n={uniqueN(per_sample$Individual_ID)})")) +
+    my_grid() +
+    theme(
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+my_ggsave("Figures/hsca-var-novar-beeswarm.pdf", width = 2, height = 2)
+```
+
+```{r summary-table}
+per_sample[, .(
+    median = percent(median(frac), accuracy = 0.1),
+    min = percent(min(frac), accuracy = 0.1),
+    max = percent(max(frac), accuracy = 0.1)
+), by = group]
+```
