@@ -1,0 +1,126 @@
+# GWAS risk alleles in each haplotype's FIRE peaks
+
+Are a haplotype's FIRE peaks enriched for the GWAS risk alleles that haplotype
+carries? The FIRE paper test (`fire-figures/Rscripts/GWAS.Rmd`), run on every
+HPRC Fiber-seq haplotype with its own peaks and phased genotypes. Tables come
+from `scripts/fiber-gwas-genotypes.sh`.
+
+```{r setup}
+source("Rscripts/utils.R")
+```
+
+```{r params}
+N_SHUFFLE <- 10
+SEEDS <- 42 + seq_len(N_SHUFFLE) - 1
+N_CORES <- max(1, parallel::detectCores() - 2)
+```
+
+```{r load-tables}
+genome <- fread("metadata/hg38.chrom.sizes", col.names = c("chrom", "size")) %>% as_tibble()
+risk <- fread("Tables/fiber-gwas-risk-alleles.tsv.gz")[
+    , .(Individual_ID, haplotype, chrom, start = pos - 1L, end = pos)
+]
+peaks <- fread("Tables/fiber-peaks-hg38.tsv.gz")[Individual_ID %in% risk$Individual_ID]
+haps <- unique(peaks[, .(Individual_ID, Platform, haplotype)])
+c(individuals = uniqueN(haps$Individual_ID), haplotypes = nrow(haps))
+```
+
+```{r enrichment}
+count_risk <- function(windows, gw) {
+    w <- windows %>%
+        bed_map(gw, n_risk = n()) %>%
+        replace_na(list(n_risk = 0L)) %>%
+        data.table()
+    w[, .(
+        n_peaks = .N, bp = sum(end - start),
+        risk_in_peaks = sum(n_risk), peaks_with_risk = sum(n_risk > 0)
+    )]
+}
+
+enrich <- rbindlist(parallel::mclapply(seq_len(nrow(haps)), function(i) {
+    k <- haps[i]
+    x <- as_tibble(peaks[k, on = .(Individual_ID, haplotype), .(chrom, start, end)])
+    gw <- as_tibble(risk[k, on = .(Individual_ID, haplotype), .(chrom, start, end)])
+    shuf <- bind_rows(lapply(SEEDS, function(s) bed_shuffle(x, genome, excl = x, seed = s)))
+    real <- count_risk(x, gw)
+    null <- count_risk(shuf, gw)
+    data.table(k, real, setnames(null, paste0(names(null), "_shuffle")))
+}, mc.cores = N_CORES))
+
+enrich[, oe := (risk_in_peaks / bp) / (risk_in_peaks_shuffle / bp_shuffle)]
+enrich[, p := fisher.test(matrix(c(
+    peaks_with_risk, n_peaks - peaks_with_risk,
+    peaks_with_risk_shuffle, n_peaks_shuffle - peaks_with_risk_shuffle
+), nrow = 2))$p.value, by = .(Individual_ID, haplotype)]
+fwrite(enrich, "Tables/fiber-gwas-enrichment.tsv", sep = "\t")
+
+enrich[, .(
+    haplotypes = .N,
+    median_oe = median(oe), min_oe = min(oe), max_oe = max(oe),
+    pooled_oe = (sum(risk_in_peaks) / sum(bp)) /
+        (sum(risk_in_peaks_shuffle) / sum(bp_shuffle)),
+    max_p = max(p)
+)]
+```
+
+```{r enrichment-plot}
+set.seed(2)
+med <- median(enrich$oe)
+
+plot <- enrich %>%
+    ggplot(aes(
+        x = "", y = oe,
+    )) +
+    geom_hline(yintercept = 1, linetype = "dashed", linewidth = 0.25, color = "grey50") +
+    geom_quasirandom(width = 0.25, alpha = 0.7, size = 0.4) +
+    annotate("errorbar", x = 1, y = med, ymin = med, ymax = med, width = 0.5, linewidth = 0.4) +
+    annotate("text",
+        x = 1, y = max(enrich$oe), label = paste0("median O/E = ", round(med, 2)),
+        vjust = -0.8, size = 1.75
+    ) +
+    scale_y_continuous(
+        "GWAS risk alleles per bp,\nFIRE peaks / shuffled peaks",
+        limits = c(0, NA),
+        expand = expansion(mult = c(0.02, 0.15))
+    ) +
+    xlab(glue("HPRC Fiber-seq haplotypes")) +
+    my_grid() +
+    theme(legend.position = "top", legend.title = element_blank())
+my_ggsave("Figures/fiber-gwas-enrichment.pdf", width = 1.5, height = 1.5)
+```
+
+```{r enrichment-plot-platform}
+plot_2 <- plot + aes(color = Platform) + scale_color_manual(values = PLAT_COLORS)
+my_ggsave(
+    "Figures/fiber-gwas-enrichment-platform.pdf",
+    width = 1.5, height = 2
+)
+```
+
+# Draft figure legend
+
+**FIRE peaks are enriched for the GWAS risk alleles carried on the same
+haplotype.** For each of `r nrow(enrich)` haplotypes from
+`r uniqueN(enrich$Individual_ID)` HPRC individuals, the rate of GWAS risk
+alleles (per kbp) carried by that haplotype within its FIRE peaks, divided by
+the rate in the same peaks randomly shuffled across GRCh38 (`r N_SHUFFLE`
+shuffles). Points are haplotypes, colored by sequencing platform. The black
+line marks the median (O/E = `r round(med, 2)`); the dashed line marks no
+enrichment.
+
+# Draft methods
+
+**GWAS risk allele enrichment.** We used the index SNPs and reported risk
+alleles of the PICS2 GWAS Catalog (2024-09-20 release). Phased genotypes for
+`r uniqueN(enrich$Individual_ID)` Fiber-seq individuals came from the HPRC
+release 2 Minigraph-Cactus GRCh38 VCF (v2.0), using top-level records only. A
+haplotype carried a risk allele if its allele at the index SNP position matched
+the risk allele, whether reference or alternate. Risk alleles that matched
+neither were compared on the opposite strand, except at A/T and C/G sites. For
+each haplotype, we counted the risk alleles it carries within its own FIRE
+peaks projected to GRCh38. As a null, we shuffled the same peaks
+`r N_SHUFFLE` times across GRCh38 (chr1-22, X, Y and M), excluding the original
+peak positions (valr `bed_shuffle`). Enrichment (O/E) is the number of risk
+alleles per kbp in the real peaks divided by that in the shuffled peaks. We
+tested each haplotype with a Fisher's exact test of peaks with and without a
+risk allele in real versus shuffled peaks.

@@ -28,6 +28,7 @@ The script is safe to re-run. It skips whatever already works.
 | Task | Script | Output |
 |---|---|---|
 | `pixi run hsca-gwas` | `Rscripts/hsca-gwas-enrichment.Rmd` | `Figures/hsca-gwas-{peaks-with-lead-variant,distance-cumulative,distance-delta}.pdf` (run `pixi run hsca-gwas-tables` once first) |
+| `pixi run fiber-gwas` | `Rscripts/fiber-gwas-enrichment.Rmd` | `Figures/fiber-gwas-enrichment.pdf`, `Tables/fiber-gwas-enrichment.tsv` (run `pixi run hsca-gwas-tables`, then `pixi run fiber-gwas-tables`, once first; the second downloads the 2.3 GB HPRC v2.0 VCF) |
 | `pixi run hsca-var-novar` | `Rscripts/hsca-var-novar.Rmd` | `Figures/hsca-var-novar-{example-pie,example-bar,beeswarm}.pdf` |
 | `pixi run hprc2-pca` | `Rscripts/hprc2-pca.Rmd` | `Figures/hprc2-pca.pdf` |
 | `pixi run hsca-drivers` | `Rscripts/hsca-drivers-hla.Rmd` | `Figures/hsca-drivers-ideogram.pdf`, `Figures/hsca-drivers-denominators.pdf` |
